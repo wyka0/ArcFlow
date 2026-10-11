@@ -5,6 +5,8 @@ import {
   ARCFLOW_V2_EXECUTE_TYPEHASH,
   computeArcFlowV2DomainSeparator as getArcFlowV2DomainSeparator,
   computeArcFlowV2AuthorizationDigestDirect as hashArcFlowV2Authorization,
+  requireArcFlowV2ContractAddress,
+  isArcFlowV2AddressConfigured,
 } from "./authorization";
 
 /**
@@ -216,16 +218,21 @@ export const ARCFLOW_V2_ABI = [
   ], outputs: [] }
 ] as const;
 
+/**
+ * Resolve the ArcFlow V2 contract address (fail closed, Phase 21.3).
+ * Delegates to the single canonical resolver in authorization-types.ts,
+ * which rejects missing, malformed, zero-address, and deprecated-predecessor
+ * values before they can be used as a verifying contract or call target.
+ * (The previous local copy silently returned the "0x" placeholder.)
+ */
 export function getArcFlowV2ContractAddress(network: ArcNetwork): `0x${string}` {
-  const configuredV2Address = process.env.NEXT_PUBLIC_ARCFLOW_V2_CONTRACT_ADDRESS?.trim();
-  return (configuredV2Address && configuredV2Address.length === 42 
-    ? configuredV2Address 
-    : "0x") as `0x${string}`;
+  void network; // address comes from configuration, not the network profile
+  return requireArcFlowV2ContractAddress();
 }
 
 export function isArcFlowV2Configured(network: ArcNetwork): boolean {
-  const address = getArcFlowV2ContractAddress(network);
-  return address !== "0x" && address.length === 42;
+  void network;
+  return isArcFlowV2AddressConfigured();
 }
 
 /** Re-export canonical functions from authorization module */

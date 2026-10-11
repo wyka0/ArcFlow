@@ -15,7 +15,6 @@ import {
   computeArcFlowV2AuthorizationDigest,
   buildArcFlowV2ExecuteTypedData,
   buildArcFlowV2ExecuteTypedDataMessage,
-  buildUSDCTransferWithAuthorizationTypedData,
   buildUSDCTransferWithAuthorizationSignMessage,
   computeUSDCAuthorizationDigest,
   signUSDCAuthorization,
@@ -231,7 +230,6 @@ export {
   computeArcFlowV2AuthorizationDigest,
   buildArcFlowV2ExecuteTypedData,
   buildArcFlowV2ExecuteTypedDataMessage,
-  buildUSDCTransferWithAuthorizationTypedData,
   buildUSDCTransferWithAuthorizationSignMessage,
   computeUSDCAuthorizationDigest,
   signUSDCAuthorization,
@@ -266,11 +264,8 @@ export function encodeExecuteSplitWithDualAuth(
   },
   network: ArcNetwork = getActiveArcNetwork()
 ): { to: Address; data: Hex } {
+  // Fail-closed resolver: throws when the V2 address is unset/malformed.
   const contractAddress = getArcFlowV2ContractAddress(network);
-  if (contractAddress === "0x") {
-    throw new Error("ArcFlowV2 contract not configured");
-  }
-
   return {
     to: contractAddress,
     data: encodeFunctionData({

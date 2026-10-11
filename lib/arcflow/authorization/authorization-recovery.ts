@@ -2,10 +2,9 @@ import { keccak256, toHex, hexToBytes, concat, encodeAbiParameters, recoverAddre
 
 import { 
   ARC_USDC_DOMAIN_SEPARATOR, 
-  ARC_USDC_EIP3009_TYPEHASH 
+  ARC_USDC_EIP3009_TYPEHASH,
+  requireArcFlowV2ContractAddress,
 } from "./authorization-types";
-
-import type { Hex } from "viem";
 
 /**
  * Authorization Recovery Module
@@ -17,23 +16,30 @@ import type { Hex } from "viem";
  * Used for local verification without mainnet calls.
  */
 
+/**
+ * Left-pad signature components to exactly 32 bytes. Components longer than
+ * 32 bytes are rejected (fail closed) rather than truncated.
+ */
+function padSignatureComponent(component: Uint8Array): Uint8Array {
+  if (component.length > 32) {
+    throw new Error("signature component exceeds 32 bytes");
+  }
+  const padded = new Uint8Array(32);
+  padded.set(component, 32 - component.length);
+  return padded;
+}
+
 const ARCFLOW_V2_EXECUTE_TYPEHASH = keccak256(toHex("ExecuteWithAuthorization(uint256 flowId,uint256 amount,uint256 validAfter,uint256 validBefore,bytes32 nonce)"));
 
 /**
- * Resolve the ArcFlow V2 contract address from runtime configuration and
- * fail closed when unconfigured. Security invariant (Phase 10.8): no
- * authorization digest may be constructed against a hardcoded fallback
- * address; the only deployed V2 candidate is UNVERIFIED.
+ * Resolve the ArcFlow V2 contract address and fail closed when unconfigured.
+ * Security invariant (Phase 10.8): no authorization digest may be constructed
+ * against a hardcoded fallback address; the only deployed V2 candidate is
+ * UNVERIFIED. Phase 21.3: delegates to the single canonical resolver in
+ * authorization-types.ts.
  */
 function requireConfiguredV2Address(): `0x${string}` {
-  const configured = process.env.NEXT_PUBLIC_ARCFLOW_V2_CONTRACT_ADDRESS?.trim();
-  if (!configured || configured.length !== 42 || !/^0x[0-9a-fA-F]{40}$/.test(configured)) {
-    throw new Error(
-      "ArcFlowV2 contract address is not configured. Set NEXT_PUBLIC_ARCFLOW_V2_CONTRACT_ADDRESS " +
-      "to an independently verified deployment before constructing V2 authorizations."
-    );
-  }
-  return configured as `0x${string}`;
+  return requireArcFlowV2ContractAddress();
 }
 
 /**
@@ -119,7 +125,7 @@ export function computeUSDCAuthorizationDigest(
  * Verify a USDC authorization signature by recovering the signer
  * Returns the recovered address
  */
-export function recoverUSDCAuthorizationSigner(
+export async function recoverUSDCAuthorizationSigner(
   params: {
     from: `0x${string}`;
     to: `0x${string}`;
@@ -131,7 +137,7 @@ export function recoverUSDCAuthorizationSigner(
     r: `0x${string}`;
     s: `0x${string}`;
   }
-): `0x${string}` {
+): Promise<`0x${string}`> {
   const digest = computeUSDCAuthorizationDigest({
     from: params.from,
     to: params.to,
@@ -141,18 +147,25 @@ export function recoverUSDCAuthorizationSigner(
     nonce: params.nonce,
   });
 
-  // Recover address from signature using viem's recoverAddress
-  const signature = concatSignature(params.r, params.s, params.v);
-  const recovered = recoverAddress({ digest, signature });
-  
-  return recovered as `0x${string}`;
+  // Recover address from signature using viem's recoverAddress.
+  // viem performs raw ECDSA recovery over the provided hash (the EIP-712
+  // digest) — no EIP-191 re-hashing. Invalid components fail closed.
+  if (![0, 1, 27, 28].includes(params.v)) {
+    throw new Error(`invalid signature recovery id: ${params.v}`);
+  }
+  const signature = concat([
+    padSignatureComponent(hexToBytes(params.r)),
+    padSignatureComponent(hexToBytes(params.s)),
+    new Uint8Array([params.v <= 1 ? params.v : params.v - 27]),
+  ]);
+  return await recoverAddress({ hash: digest, signature });
 }
 
 /**
  * Verify a USDC authorization signature locally
  * Returns true if the recovered address matches the expected owner
  */
-export function verifyUSDCAuthorization(
+export async function verifyUSDCAuthorization(
   params: {
     from: `0x${string}`;
     to: `0x${string}`;
@@ -165,8 +178,8 @@ export function verifyUSDCAuthorization(
     s: `0x${string}`;
   },
   expectedOwner: `0x${string}`
-): boolean {
-  const recovered = recoverUSDCAuthorizationSigner({
+): Promise<boolean> {
+  const recovered = await recoverUSDCAuthorizationSigner({
     from: params.from,
     to: params.to,
     value: params.value,
@@ -232,7 +245,7 @@ export function computeArcFlowV2AuthorizationDigest(
 /**
  * Verify an ArcFlow V2 authorization signature
  */
-export function verifyArcFlowV2Authorization(
+export async function verifyArcFlowV2Authorization(
   params: {
     flowId: bigint;
     amount: bigint;
@@ -244,7 +257,7 @@ export function verifyArcFlowV2Authorization(
     s: `0x${string}`;
   },
   expectedOwner: `0x${string}`
-): boolean {
+): Promise<boolean> {
   const digest = computeArcFlowV2AuthorizationDigest({
     flowId: params.flowId,
     amount: params.amount,
@@ -254,18 +267,15 @@ export function verifyArcFlowV2Authorization(
   });
 
   // Recover address from signature
-  const signature = concatSignature(params.r, params.s, params.v);
-  const recovered = recoverAddress({ digest, signature });
-  
-  return recovered.toLowerCase() === expectedOwner.toLowerCase();
-}
+  if (![0, 1, 27, 28].includes(params.v)) {
+    throw new Error(`invalid signature recovery id: ${params.v}`);
+  }
+  const signature = concat([
+    padSignatureComponent(hexToBytes(params.r)),
+    padSignatureComponent(hexToBytes(params.s)),
+    new Uint8Array([params.v <= 1 ? params.v : params.v - 27]),
+  ]);
+  const recovered = await recoverAddress({ hash: digest, signature });
 
-/**
- * Concatenate signature components into 65-byte signature
- */
-function concatSignature(r: `0x${string}`, s: `0x${string}`, v: number): `0x${string}` {
-  const rBytes = r.slice(2).padStart(64, "0");
-  const sBytes = s.slice(2).padStart(64, "0");
-  const vByte = v.toString(16).padStart(2, "0");
-  return ("0x" + rBytes + sBytes + vByte) as `0x${string}`;
+  return recovered.toLowerCase() === expectedOwner.toLowerCase();
 }

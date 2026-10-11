@@ -1,9 +1,8 @@
-import { keccak256, encodeAbiParameters, toHex, hexToBytes, concat, recoverAddress } from "viem";
+import { keccak256, encodeAbiParameters, toHex, hexToBytes, concat, recoverAddress, parseSignature } from "viem";
 import type { TypedDataDomain, PublicClient, WalletClient } from "viem";
 
 import { getActiveArcNetwork, type ArcNetwork } from "../../arc/network";
 import {
-  ARC_USDC_EIP3009_DOMAIN,
   ARC_USDC_DOMAIN_SEPARATOR,
   ARC_USDC_EIP3009_TYPEHASH,
 } from "./authorization-types";
@@ -21,50 +20,15 @@ import {
  *   - Implementation bytecode contains TransferWithAuthorization typehash
  */
 
-// USDC EIP-3009 TransferWithAuthorization Types
-export const USDC_EIP3009_TRANSFER_TYPES = {
-  TransferWithAuthorization: [
-    { name: "from", type: "address" },
-    { name: "to", type: "address" },
-    { name: "value", type: "uint256" },
-    { name: "validAfter", type: "uint256" },
-    { name: "validBefore", type: "uint256" },
-    { name: "nonce", type: "bytes32" },
-    { name: "v", type: "uint8" },
-    { name: "r", type: "bytes32" },
-    { name: "s", type: "bytes32" },
-  ],
-} as const;
-
 /**
- * Build USDC EIP-3009 typed data for transferWithAuthorization
- */
-export function buildUSDCTransferWithAuthorizationTypedData(
-  params: {
-    from: `0x${string}`;
-    to: `0x${string}`;
-    value: bigint;
-    validAfter: bigint;
-    validBefore: bigint;
-    nonce: `0x${string}`;
-  },
-  network: ArcNetwork = getActiveArcNetwork()
-): { domain: TypedDataDomain; types: typeof USDC_EIP3009_TRANSFER_TYPES; message: Record<string, unknown> } {
-  return {
-    domain: {
-      name: "USDC",
-      version: "2",
-      chainId: network.chainId,
-      verifyingContract: network.usdcAddress,
-    },
-    types: USDC_EIP3009_TRANSFER_TYPES,
-    message: params,
-  };
-}
-
-/**
- * Build USDC EIP-3009 typed data for signing (without v, r, s)
- * This is what the user signs with their wallet
+ * Build USDC EIP-3009 typed data for signing transferWithAuthorization.
+ *
+ * Phase 21.3: the previous nine-field variant (`v, r, s` in the TYPES with a
+ * six-field message) was removed — those fields belong to the on-chain
+ * FUNCTION CALL ABI, never to the signed EIP-712 struct. The signed struct is
+ * exactly the six fields of the verified on-chain typehash:
+ * TransferWithAuthorization(address from,address to,uint256 value,
+ *   uint256 validAfter,uint256 validBefore,bytes32 nonce)
  */
 export function buildUSDCTransferWithAuthorizationSignMessage(
   params: {
@@ -76,7 +40,7 @@ export function buildUSDCTransferWithAuthorizationSignMessage(
     nonce: `0x${string}`;
   },
   network: ArcNetwork = getActiveArcNetwork()
-): { domain: TypedDataDomain; types: typeof USDC_EIP3009_TRANSFER_TYPES; message: { from: `0x${string}`; to: `0x${string}`; value: bigint; validAfter: bigint; validBefore: bigint; nonce: `0x${string}` } } {
+): { domain: TypedDataDomain; types: { TransferWithAuthorization: readonly { name: string; type: string }[] }; message: { from: `0x${string}`; to: `0x${string}`; value: bigint; validAfter: bigint; validBefore: bigint; nonce: `0x${string}` } } {
   return {
     domain: {
       name: "USDC",
@@ -84,6 +48,12 @@ export function buildUSDCTransferWithAuthorizationSignMessage(
       chainId: 5042,
       verifyingContract: "0x3600000000000000000000000000000000000000",
     },
+    // Signing types MUST match the on-chain EIP-3009 typehash exactly:
+    // TransferWithAuthorization(address from,address to,uint256 value,
+    //   uint256 validAfter,uint256 validBefore,bytes32 nonce)
+    // v/r/s are the OUTPUT of signing and must never appear in the signed
+    // struct — including them would bind signatures to a struct the
+    // contract's typehash can never verify.
     types: {
       TransferWithAuthorization: [
         { name: "from", type: "address" },
@@ -92,9 +62,6 @@ export function buildUSDCTransferWithAuthorizationSignMessage(
         { name: "validAfter", type: "uint256" },
         { name: "validBefore", type: "uint256" },
         { name: "nonce", type: "bytes32" },
-        { name: "v", type: "uint8" },
-        { name: "r", type: "bytes32" },
-        { name: "s", type: "bytes32" },
       ],
     },
     message: {
@@ -184,13 +151,46 @@ export async function signUSDCAuthorization(
     message: typedData.message,
   });
 
-  // Parse signature into v, r, s
-  const sig = signature as `0x${string}`;
-  const r = sig.slice(0, 66) as `0x${string}`;
-  const s = "0x" + sig.slice(66, 130) as `0x${string}`;
-  const v = parseInt(sig.slice(130, 132), 16);
+  // Parse signature into v, r, s with strict validation and normalization
+  // (exactly 65 bytes; recovery id normalized to the contract's 27/28 form).
+  return parseEIP712Signature(signature);
+}
 
-  return { v, r, s };
+/**
+ * Parse a 65-byte EIP-712 wallet signature into (v, r, s) components with
+ * strict validation (Phase 21.3 shared helper):
+ *   - exactly 0x + 130 hex chars (65 bytes) required;
+ *   - components parsed by viem's parseSignature (no manual slicing);
+ *   - recovery id normalized to 27/28 (yParity 0/1 form → 27/28), matching
+ *     what the on-chain ECDSA pre-check accepts.
+ * Malformed values throw — they are never silently truncated or padded.
+ */
+export function parseEIP712Signature(signature: `0x${string}`): {
+  v: number;
+  r: `0x${string}`;
+  s: `0x${string}`;
+} {
+  if (signature.length !== 132) {
+    throw new Error(
+      `Unexpected signature length from wallet: expected 132 hex chars (65 bytes), got ${signature.length}`,
+    );
+  }
+  const parsed = parseSignature(signature);
+  const v = parsed.v !== undefined ? Number(parsed.v) : 27 + parsed.yParity;
+  return { r: parsed.r, s: parsed.s, v };
+}
+
+/**
+ * Left-pad signature components to exactly 32 bytes. Components longer than
+ * 32 bytes are rejected (fail closed) rather than truncated.
+ */
+function padSignatureComponent(component: Uint8Array): Uint8Array {
+  if (component.length > 32) {
+    throw new Error("signature component exceeds 32 bytes");
+  }
+  const padded = new Uint8Array(32);
+  padded.set(component, 32 - component.length);
+  return padded;
 }
 
 /**
@@ -201,14 +201,25 @@ export async function signUSDCAuthorization(
  * — NOT recoverMessageAddress({ message }), which re-hashes the digest with
  * the EIP-191 personal_sign prefix and would recover the wrong signer.
  */
-export function verifyUSDCAuthorizationDigest(
+export async function verifyUSDCAuthorizationDigest(
   digest: `0x${string}`,
   signature: { v: number; r: `0x${string}`; s: `0x${string}` },
   expectedOwner: `0x${string}`
-): boolean {
+): Promise<boolean> {
   try {
-    const sig65 = `0x${signature.r.slice(2)}${signature.s.slice(2)}${signature.v.toString(16).padStart(2, "0")}` as `0x${string}`;
-    const recovered = recoverAddress({ hash: digest, signature: sig65 });
+    // Build the 65-byte signature from validated components. viem's
+    // recoverAddress expects { hash, signature } and performs raw ECDSA
+    // recovery over the EIP-712 digest — no EIP-191 re-hashing.
+    // Invalid components (odd-length hex, >32 bytes, invalid v) fail closed.
+    if (![0, 1, 27, 28].includes(signature.v)) {
+      return false;
+    }
+    const sig65 = concat([
+      padSignatureComponent(hexToBytes(signature.r)),
+      padSignatureComponent(hexToBytes(signature.s)),
+      new Uint8Array([signature.v <= 1 ? signature.v : signature.v - 27]),
+    ]);
+    const recovered = await recoverAddress({ hash: digest, signature: sig65 });
     return recovered.toLowerCase() === expectedOwner.toLowerCase();
   } catch {
     return false;
@@ -252,7 +263,7 @@ export async function getUSDCDomainSeparator(
  * Verify that a USDC authorization signature is valid
  * by computing the digest and recovering the signer
  */
-export function verifyUSDCAuthorization(
+export async function verifyUSDCAuthorization(
   params: {
     from: `0x${string}`;
     to: `0x${string}`;
@@ -265,7 +276,7 @@ export function verifyUSDCAuthorization(
     s: `0x${string}`;
   },
   expectedOwner: `0x${string}`
-): boolean {
+): Promise<boolean> {
   const digest = computeUSDCAuthorizationDigest(params);
-  return verifyUSDCAuthorizationDigest(digest, { v: params.v, r: params.r, s: params.s }, expectedOwner);
+  return await verifyUSDCAuthorizationDigest(digest, { v: params.v, r: params.r, s: params.s }, expectedOwner);
 }

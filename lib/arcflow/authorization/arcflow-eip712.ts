@@ -5,6 +5,8 @@ import type { TypedDataDomain } from "viem";
 
 import { getActiveArcNetwork, type ArcNetwork } from "../../arc/network";
 
+import { requireArcFlowV2ContractAddress } from "./authorization-types";
+
 /**
  * ArcFlow V2 EIP-712 Authorization Module
  * 
@@ -28,15 +30,9 @@ export function getArcFlowV2EIP712Domain(network: ArcNetwork): TypedDataDomain {
     name: "ArcFlow",
     version: "1",
     chainId: network.chainId,
-    verifyingContract: getArcFlowV2ContractAddress(network),
+    // Fail closed (Phase 21.3): never a "0x" placeholder verifying contract.
+    verifyingContract: requireConfiguredV2Address(),
   };
-}
-
-function getArcFlowV2ContractAddress(network: ArcNetwork): `0x${string}` {
-  const configuredV2Address = process.env.NEXT_PUBLIC_ARCFLOW_V2_CONTRACT_ADDRESS?.trim();
-  return (configuredV2Address && configuredV2Address.length === 42 
-    ? configuredV2Address 
-    : "0x") as `0x${string}`;
 }
 
 /**
@@ -49,16 +45,13 @@ function getArcFlowV2ContractAddress(network: ArcNetwork): `0x${string}` {
  * would bind user signatures to an unvalidated contract. Callers must set
  * NEXT_PUBLIC_ARCFLOW_V2_CONTRACT_ADDRESS to the deployment that has passed
  * independent review.
+ *
+ * Phase 21.3: delegates to the single canonical resolver in
+ * authorization-types.ts (which also rejects the zero address and the
+ * deprecated predecessor) — no more per-module copies.
  */
 function requireConfiguredV2Address(): `0x${string}` {
-  const configured = process.env.NEXT_PUBLIC_ARCFLOW_V2_CONTRACT_ADDRESS?.trim();
-  if (!configured || configured.length !== 42 || !/^0x[0-9a-fA-F]{40}$/.test(configured)) {
-    throw new Error(
-      "ArcFlowV2 contract address is not configured. Set NEXT_PUBLIC_ARCFLOW_V2_CONTRACT_ADDRESS " +
-      "to an independently verified deployment before constructing V2 authorizations."
-    );
-  }
-  return configured as `0x${string}`;
+  return requireArcFlowV2ContractAddress();
 }
 
 /**
@@ -77,7 +70,7 @@ export function computeArcFlowV2AuthorizationDigest(
   // Domain separator for ArcFlow V2
   const domainSeparator = computeArcFlowV2DomainSeparator({
     chainId: network.chainId,
-    verifyingContract: getArcFlowV2ContractAddress(network),
+    verifyingContract: requireConfiguredV2Address(),
   });
 
   // Compute struct hash using viem's encodeAbiParameters
@@ -116,7 +109,7 @@ export function computeArcFlowV2AuthorizationDigest(
 export function computeArcFlowV2DomainSeparator(params: {
   chainId: number;
   verifyingContract: `0x${string}`;
-}): `${string}` {
+}): `0x${string}` {
   const DOMAIN_TYPEHASH = keccak256(toHex("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"));
   const NAME_HASH = keccak256(toHex("ArcFlow"));
   const VERSION_HASH = keccak256(toHex("1"));
@@ -159,7 +152,7 @@ export function buildArcFlowV2ExecuteTypedData(
       name: "ArcFlow",
       version: "1",
       chainId: network.chainId,
-      verifyingContract: getArcFlowV2ContractAddress(network),
+      verifyingContract: requireConfiguredV2Address(),
     },
     types: {
       ExecuteWithAuthorization: [

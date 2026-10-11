@@ -9,6 +9,7 @@ import {
   buildArcFlowV2ExecuteTypedDataMessage,
   computeArcFlowV2DomainSeparator,
 } from "./arcflow-eip712";
+import { parseEIP712Signature } from "./arc-usdc-eip3009";
 
 /**
  * Server-only module for ArcFlow V2 EIP-712 Authorization
@@ -20,6 +21,11 @@ import {
 /**
  * Sign ArcFlow V2 authorization with wallet
  * This function requires server-side wallet access and should only be called from server components or server actions.
+ *
+ * Phase 21.3: signature parsing delegates to the shared validated helper
+ * (exactly 65 bytes; recovery id normalized to the contract's 27/28 form).
+ * Digest semantics unchanged: buildArcFlowV2ExecuteTypedDataMessage (fail
+ * closed on unconfigured V2 address) + signTypedData — no EIP-191 re-hash.
  */
 export async function signArcFlowV2Authorization(
   walletClient: WalletClient,
@@ -33,7 +39,7 @@ export async function signArcFlowV2Authorization(
   }
 ): Promise<{ v: number; r: `0x${string}`; s: `0x${string}` }> {
   const typedData = buildArcFlowV2ExecuteTypedDataMessage(params);
-  
+
   const signature = await walletClient.signTypedData({
     account,
     domain: typedData.domain,
@@ -42,10 +48,5 @@ export async function signArcFlowV2Authorization(
     message: typedData.message,
   });
 
-  const sig = signature as `0x${string}`;
-  const r = sig.slice(0, 66) as `0x${string}`;
-  const s = "0x" + sig.slice(66, 130) as `0x${string}`;
-  const v = parseInt(sig.slice(130, 132), 16);
-
-  return { v, r, s };
+  return parseEIP712Signature(signature);
 }

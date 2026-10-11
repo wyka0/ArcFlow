@@ -1,7 +1,6 @@
 export * from "./authorization-types";
 
 export {
-  buildUSDCTransferWithAuthorizationTypedData,
   buildUSDCTransferWithAuthorizationSignMessage,
   computeUSDCAuthorizationDigest,
   signUSDCAuthorization,
