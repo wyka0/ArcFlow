@@ -1,9 +1,19 @@
-import type { Metadata, Viewport } from "next";
-import { JetBrains_Mono } from "next/font/google";
+﻿import type { Metadata, Viewport } from "next";
+import { Geist, Geist_Mono, JetBrains_Mono } from "next/font/google";
 
 import { Providers } from "@/components/providers";
 
 import "./globals.css";
+
+const geistSans = Geist({
+  subsets: ["latin"],
+  variable: "--font-geist-sans",
+});
+
+const geistMono = Geist_Mono({
+  subsets: ["latin"],
+  variable: "--font-geist-mono",
+});
 
 const jetbrainsMono = JetBrains_Mono({
   subsets: ["latin"],
@@ -11,9 +21,9 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AgentPay — Autonomous USDC payments with spending policies",
+  title: "ArcFlow \u2014 Programmable USDC payment workflows on Arc",
   description:
-    "AgentPay lets an AI agent purchase services with USDC on Arc while a policy engine enforces spending limits.",
+    "Non-custodial, dual-authorized USDC payment workflows on Arc mainnet. Define triggers, conditions, and actions \u2014 deploy as smart contracts.",
 };
 
 export const viewport: Viewport = {
@@ -22,10 +32,12 @@ export const viewport: Viewport = {
   initialScale: 1,
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({
+  children,
+}: LayoutProps<"/">) {
   return (
-    <html lang="en" className={`${jetbrainsMono.variable} h-full antialiased`}>
-      <body className="flex min-h-full flex-col font-mono">
+    <html lang="en" className={`${geistSans.variable} ${geistMono.variable} ${jetbrainsMono.variable} h-full antialiased`}>
+      <body className="flex min-h-full flex-col font-sans">
         <Providers>{children}</Providers>
       </body>
     </html>
