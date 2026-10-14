@@ -1,16 +1,18 @@
 "use client";
 
 import { useState } from "react";
+import { ChevronDown } from "lucide-react";
+
 import { useAuth } from "@/components/auth-provider";
 import { useWallet } from "@/components/wallet-provider";
 import { shortenAddress } from "@/lib/wallet/state";
 
 const PRIMARY =
-  "border-2 border-foreground bg-foreground px-3 py-1.5 text-[10px] font-bold tracking-[0.2em] uppercase text-background transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60";
+  "inline-flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50";
 const DROPDOWN =
-  "absolute right-0 top-full mt-1 z-20 flex flex-col border-2 border-foreground bg-background min-w-[160px] shadow-[4px_4px_0_0_rgb(0,0,0)]";
+  "absolute right-0 top-full mt-2 z-20 flex min-w-[176px] flex-col overflow-hidden rounded-lg border border-border bg-popover p-1 shadow-md";
 const DROPDOWN_ITEM =
-  "border-0 bg-transparent px-3 py-2 text-[10px] font-bold tracking-[0.15em] uppercase text-foreground text-left transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus:bg-accent focus:text-foreground";
+  "w-full rounded-md bg-transparent px-3 py-2 text-left text-sm font-medium text-popover-foreground transition-colors hover:bg-muted focus:bg-muted focus:outline-none";
 
 /**
  * Unified wallet header button.
@@ -90,7 +92,7 @@ export function WalletHeaderButton() {
       >
         <span className="flex items-center gap-1.5">
           {shortenAddress(address ?? "—")}
-          <span aria-hidden>▾</span>
+          <ChevronDown className="size-4" aria-hidden />
         </span>
       </button>
 

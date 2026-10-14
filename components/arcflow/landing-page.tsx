@@ -1,6 +1,8 @@
 ﻿"use client";
 
 import Link from "next/link";
+
+import { BrandMark } from "@/components/brand-mark";
 import {
   Shield,
   Zap,
@@ -87,6 +89,14 @@ export function LandingPage() {
               {item}
             </span>
           ))}
+        </div>
+      </div>
+
+      {/* Brand row */}
+      <div className="mx-auto w-full max-w-5xl px-4 pt-6">
+        <div className="flex items-center gap-2">
+          <BrandMark size={22} className="text-accent" />
+          <span className="text-sm font-semibold tracking-tight">ArcFlow</span>
         </div>
       </div>
 

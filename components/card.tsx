@@ -1,5 +1,12 @@
 import type { ReactNode } from "react";
 
+/*
+ * Shared card primitives — restyled to the reference kit's design language:
+ * rounded-lg, 1px border-border, bg-card surfaces. The exported API
+ * (Card / CardHeader / CardBody / SectionLabel) is unchanged, so existing
+ * consumers (flow builder steps) adopt the new style automatically.
+ */
+
 export function Card({
   children,
   className = "",
@@ -10,9 +17,9 @@ export function Card({
   variant?: "default" | "primary" | "compact";
 }) {
   const variantClasses = {
-    default: "border-2 border-foreground bg-background",
-    primary: "border-2 border-foreground bg-background shadow-[0_4px_0_0_hsl(var(--border))]",
-    compact: "border border-foreground/60 bg-background/80",
+    default: "rounded-lg border border-border bg-card text-card-foreground",
+    primary: "rounded-lg border border-accent/40 bg-card text-card-foreground shadow-sm",
+    compact: "rounded-md border border-border bg-card/80",
   };
   return <section className={`${variantClasses[variant]} ${className}`}>{children}</section>;
 }
@@ -29,9 +36,9 @@ export function CardHeader({
   badge?: ReactNode;
 }) {
   return (
-    <header className="flex flex-wrap items-center justify-between gap-3 border-b-2 border-foreground px-5 py-3 lg:px-6 lg:py-4">
-      <span className="text-[11px] tracking-[0.2em] text-muted-foreground uppercase font-mono">{label}</span>
-      <div className="flex items-center gap-3 text-[10px] tracking-[0.2em] text-muted-foreground uppercase font-mono">
+    <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-3 lg:px-6">
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      <div className="flex items-center gap-3 text-xs text-muted-foreground">
         {badge && <span className="text-accent">{badge}</span>}
         {meta && <span>{meta}</span>}
         {action}
@@ -61,10 +68,10 @@ export function SectionLabel({
   label: string;
 }) {
   return (
-    <div className="flex items-center gap-4 mb-6">
-      <span className="text-[10px] tracking-[0.2em] text-muted-foreground uppercase font-mono">{label}</span>
+    <div className="mb-6 flex items-center gap-4">
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
       <div className="flex-1 border-t border-border" />
-      <span className="text-[10px] tracking-[0.2em] text-muted-foreground uppercase font-mono">{index}</span>
+      <span className="text-xs text-muted-foreground">{index}</span>
     </div>
   );
 }

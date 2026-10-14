@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useCallback, type ChangeEvent, type FocusEvent } from "react";
 import { Card, CardBody } from "@/components/card";
@@ -100,14 +100,14 @@ export function ActionStep({ actions, onChange, onBlur, active, completed, error
         />
         <div className="mt-6 space-y-4">
           <div className="flex items-center justify-between">
-            <h4 className="text-xs font-mono tracking-[0.1em] uppercase text-muted-foreground">Recipients</h4>
+            <h4 className="text-xs font-medium text-muted-foreground">Recipients</h4>
             <button
               type="button"
               onClick={handleAddAction}
               disabled={actions.length >= 5 || !active}
-              className="text-xs font-mono tracking-[0.1em] uppercase text-accent hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              className="text-xs font-medium text-accent transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
             >
-              + Add Recipient
+              + Add recipient
             </button>
           </div>
 
@@ -115,8 +115,8 @@ export function ActionStep({ actions, onChange, onBlur, active, completed, error
             {actions.map((action, index) => (
               <div
                 key={index}
-                className={`flex items-center gap-3 p-3 border-2 rounded-none transition-all duration-200 ${
-                  active ? "border-border bg-background" : "border-border/50 bg-muted/50"
+                className={`flex items-center gap-3 rounded-lg border p-3 transition-all duration-200 ${
+                  active ? "border-border bg-card" : "border-border/50 bg-muted/50"
                 }`}
                 role="listitem"
               >
@@ -135,8 +135,8 @@ export function ActionStep({ actions, onChange, onBlur, active, completed, error
                     onChange={(e) => handleRecipientChange(index, e.target.value)}
                     onBlur={onBlur}
                     placeholder="0x..."
-                    className={`w-full px-3 py-2 border border-border rounded-none font-mono text-sm bg-background transition-colors ${
-                      recipientErrors[index] ? "border-destructive focus:border-destructive" : "focus:border-foreground"
+                    className={`w-full rounded-md border bg-card px-3 py-2 font-mono text-sm transition-colors ${
+                      recipientErrors[index] ? "border-destructive focus:border-destructive" : "border-border focus:border-accent"
                     }`}
                     aria-invalid={!!recipientErrors[index]}
                     aria-describedby={recipientErrors[index] ? `action-recipient-${index}-error` : undefined}
@@ -161,8 +161,8 @@ export function ActionStep({ actions, onChange, onBlur, active, completed, error
                     onChange={(e) => handlePercentageChange(index, e)}
                     onBlur={(e) => handlePercentageBlur(index, e)}
                     placeholder="%"
-                    className={`w-full px-3 py-2 border border-border rounded-none font-mono text-sm text-center bg-background transition-colors ${
-                      percentageErrors[index] ? "border-destructive focus:border-destructive" : "focus:border-foreground"
+                    className={`w-full rounded-md border bg-card px-3 py-2 text-center font-mono text-sm transition-colors ${
+                      percentageErrors[index] ? "border-destructive focus:border-destructive" : "border-border focus:border-accent"
                     }`}
                     aria-invalid={!!percentageErrors[index]}
                     aria-describedby={percentageErrors[index] ? `action-percentage-${index}-error` : undefined}
@@ -176,7 +176,7 @@ export function ActionStep({ actions, onChange, onBlur, active, completed, error
                     type="button"
                     onClick={() => handleRemoveAction(index)}
                     disabled={!active}
-                    className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-none transition-colors disabled:opacity-40"
+                    className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition-colors disabled:opacity-40"
                     aria-label={`Remove recipient ${index + 1}`}
                   >
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -190,7 +190,7 @@ export function ActionStep({ actions, onChange, onBlur, active, completed, error
           </div>
 
           <div
-            className={`p-3 border-2 rounded-none font-mono text-sm transition-all duration-200 ${
+            className={`rounded-lg border p-3 text-sm transition-all duration-200 ${
               isValidTotal
                 ? "border-success bg-success/10 text-success"
                 : "border-warning bg-warning/10 text-warning"
@@ -211,7 +211,7 @@ export function ActionStep({ actions, onChange, onBlur, active, completed, error
           </div>
 
           {hasError && (
-            <div className="p-3 border-2 border-destructive bg-destructive/10 text-destructive text-xs font-mono" role="alert">
+            <div className="rounded-lg border border-destructive bg-destructive/10 p-3 text-xs text-destructive" role="alert">
               {errors.join(", ")}
             </div>
           )}

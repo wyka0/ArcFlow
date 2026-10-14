@@ -1,8 +1,9 @@
-"use client";
+﻿"use client";
 
-import { useCallback, useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { motion } from "framer-motion";
 import { Card, CardBody } from "@/components/card";
+import { Button } from "@/components/ui/button";
 import { useWallet } from "@/components/wallet-provider";
 import { useTransactionSender } from "./use-transaction-sender";
 import type { Flow, FlowValidationError } from "@/types/flow";
@@ -48,7 +49,7 @@ export function FlowBuilder({ initialFlow, onActivate }: FlowBuilderProps) {
 
   const { session, connection } = useWallet();
   const { sendTransaction, isSending } = useTransactionSender();
-  const network = getActiveArcNetwork();
+  const network = useMemo(() => getActiveArcNetwork(), []);
 
   const stepOrder: Step[] = ["trigger", "condition", "action"];
   const currentStepIndex = stepOrder.indexOf(currentStep);
@@ -56,6 +57,11 @@ export function FlowBuilder({ initialFlow, onActivate }: FlowBuilderProps) {
   const walletAddress = session.wallet.address;
   const isWalletConnected = connection === "connected" || connection === "wrong-network";
   const isWrongNetwork = connection === "wrong-network";
+
+  const canDeploy = useMemo(
+    () => isWalletConnected && !isWrongNetwork && !!walletAddress && validateAll(),
+    [isWalletConnected, isWrongNetwork, walletAddress, errors, flow],
+  );
 
   const updateFlow = useCallback(<K extends keyof Partial<Flow>>(key: K, value: Partial<Flow>[K]) => {
     setFlow((prev) => ({ ...prev, [key]: value }));
@@ -119,9 +125,7 @@ export function FlowBuilder({ initialFlow, onActivate }: FlowBuilderProps) {
   }, []);
 
   const handleDeploy = useCallback(async () => {
-    if (!validateAll()) return;
-    if (!walletAddress) return;
-    if (!isWalletConnected) return;
+    if (!canDeploy) return;
 
     setDeployment({ phase: "create" });
 
@@ -191,7 +195,7 @@ export function FlowBuilder({ initialFlow, onActivate }: FlowBuilderProps) {
         error: error instanceof Error ? error.message : "Deployment failed" 
       }));
     }
-  }, [flow, walletAddress, isWalletConnected, sendTransaction]);
+  }, [canDeploy, sendTransaction]);
 
   const isStepCompleted = (step: Step) => {
     const index = stepOrder.indexOf(step);
@@ -211,14 +215,12 @@ export function FlowBuilder({ initialFlow, onActivate }: FlowBuilderProps) {
 
   const isStepActive = (step: Step) => step === currentStep;
 
-  const canDeploy: boolean = isWalletConnected && !isWrongNetwork && !!walletAddress && validateAll();
-
   return (
     <div className="w-full">
       {/* Step Indicator */}
       <div className="flex items-center gap-2 mb-6 lg:mb-8" role="navigation" aria-label="Flow builder steps">
         {stepOrder.map((step, index) => {
-          const labels: Record<Step, string> = { trigger: "TRIGGER", condition: "CONDITION", action: "ACTION", review: "REVIEW", deploying: "DEPLOYING" };
+          const labels: Record<Step, string> = { trigger: "Trigger", condition: "Condition", action: "Action", review: "Review", deploying: "Deploying" };
           return (
             <div key={step} className="flex items-center flex-1">
               <StepNumber
@@ -227,7 +229,7 @@ export function FlowBuilder({ initialFlow, onActivate }: FlowBuilderProps) {
                 completed={isStepCompleted(step)}
               />
               <span
-                className={`hidden sm:block text-center text-[10px] font-mono tracking-[0.1em] uppercase transition-colors ${
+                className={`hidden sm:block text-center text-xs font-medium transition-colors ${
                   isStepCompleted(step) ? "text-success" : isStepActive(step) ? "text-foreground" : "text-muted-foreground"
                 }`}
               >
@@ -301,29 +303,24 @@ export function FlowBuilder({ initialFlow, onActivate }: FlowBuilderProps) {
 
               {/* Navigation */}
               <div className="mt-8 flex items-center justify-between pt-6 border-t border-border">
-                <button
-                  type="button"
+                <Button
+                  variant="outline"
                   onClick={handleBack}
                   disabled={currentStepIndex === 0}
-                  className="flex items-center gap-2 px-4 py-2.5 border-2 border-border bg-background text-foreground font-mono text-xs tracking-[0.1em] uppercase hover:border-foreground transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
                     <line x1={19} y1={12} x2={5} y2={12} />
                     <polyline points="12 19 5 12 12 5" />
                   </svg>
                   Back
-                </button>
-                <button
-                  type="button"
-                  onClick={handleNext}
-                  className="flex items-center gap-2 px-6 py-2.5 border-2 border-foreground bg-foreground text-background font-mono text-xs tracking-[0.1em] uppercase hover:bg-accent hover:border-accent hover:text-accent-foreground transition-colors"
-                >
+                </Button>
+                <Button onClick={handleNext}>
                   {currentStepIndex === stepOrder.length - 1 ? "Review" : "Next"}
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
                     <line x1={5} y1={12} x2={19} y2={12} />
                     <polyline points="12 5 19 12 12 19" />
                   </svg>
-                </button>
+                </Button>
               </div>
             </>
           )}
@@ -359,17 +356,16 @@ export function FlowBuilder({ initialFlow, onActivate }: FlowBuilderProps) {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, delay: 0.3, ease: [0.22, 1, 0.36, 1] }}
       >
-        <button
-          type="button"
+        <Button
+          className="w-full"
           onClick={() => {
             if (validateAll()) {
               setShowReview(true);
             }
           }}
-          className="w-full px-6 py-3 border-2 border-foreground bg-foreground text-background font-mono text-xs tracking-[0.1em] uppercase hover:bg-accent hover:border-accent hover:text-accent-foreground transition-colors"
         >
-          REVIEW & DEPLOY
-        </button>
+          Review & Deploy
+        </Button>
       </motion.div>
     </div>
   );
@@ -402,14 +398,14 @@ function ReviewScreen({
       <Card variant="primary" className="border-success">
         <CardBody className="pt-6">
           <div className="text-center mb-6">
-            <div className="inline-flex items-center justify-center w-16 h-16 border-2 border-success rounded-none bg-success/10 mb-4">
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-lg bg-success/10 mb-4">
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" className="text-success">
                 <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
                 <polyline points="22 4 12 14.01 9 11.01" />
               </svg>
             </div>
-            <h2 className="font-mono font-bold text-xl tracking-[0.1em] uppercase text-success">READY FOR DEPLOYMENT</h2>
-            <p className="mt-2 text-sm text-muted-foreground font-mono">Your workflow is valid. Connect wallet and deploy to Arc mainnet.</p>
+            <h2 className="text-xl font-semibold text-success">Ready for deployment</h2>
+            <p className="mt-2 text-sm text-muted-foreground">Your workflow is valid. Connect wallet and deploy to Arc mainnet.</p>
           </div>
 
           <div className="space-y-4 text-sm">
@@ -443,49 +439,44 @@ function ReviewScreen({
           </div>
 
           {!walletConnected && (
-            <div className="p-4 border-2 border-warning bg-warning/10 text-warning text-xs font-mono">
-              <div className="flex items-center gap-2 mb-1">
+            <div className="rounded-lg border border-warning bg-warning/10 p-4 text-xs text-warning">
+              <div className="mb-1 flex items-center gap-2">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
                   <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
                   <line x1={12} y1={9} x2={12} y2={13} />
                   <line x1={12} y1={17} x2={12.01} y2={17} />
                 </svg>
-                <span className="font-bold tracking-[0.1em] uppercase">Wallet not connected</span>
+                <span className="font-semibold">Wallet not connected</span>
               </div>
               <p className="ml-6">Connect your wallet to deploy this flow to Arc mainnet.</p>
             </div>
           )}
 
           {wrongNetwork && (
-            <div className="p-4 border-2 border-destructive bg-destructive/10 text-destructive text-xs font-mono">
-              <div className="flex items-center gap-2 mb-1">
+            <div className="rounded-lg border border-destructive bg-destructive/10 p-4 text-xs text-destructive">
+              <div className="mb-1 flex items-center gap-2">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
                   <circle cx={12} cy={12} r={10} />
                   <line x1={15} y1={9} x2={9} y2={15} />
                   <line x1={9} y1={9} x2={15} y2={15} />
                 </svg>
-                <span className="font-bold tracking-[0.1em] uppercase">Wrong network</span>
+                <span className="font-semibold">Wrong network</span>
               </div>
               <p className="ml-6">Switch to Arc mainnet (chain ID 5042) in your wallet.</p>
             </div>
           )}
 
-          <div className="mt-6 flex flex-col sm:flex-row gap-3 justify-center">
-            <button
-              type="button"
-              onClick={onBack}
-              className="flex-1 sm:flex-none px-6 py-3 border-2 border-border bg-background text-foreground font-mono text-xs tracking-[0.1em] uppercase hover:border-foreground hover:bg-muted transition-colors"
-            >
-              BACK TO EDIT
-            </button>
-            <button
-              type="button"
+          <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
+            <Button variant="outline" onClick={onBack} className="sm:flex-none">
+              Back to edit
+            </Button>
+            <Button
               onClick={onDeploy}
               disabled={!canDeploy || isSending}
-              className="flex-1 sm:flex-none px-6 py-3 border-2 border-success bg-success text-success-foreground font-mono text-xs tracking-[0.1em] uppercase hover:bg-success/90 hover:border-success transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="bg-success text-success-foreground hover:bg-success/90 sm:flex-none"
             >
-              {isSending ? "DEPLOYING..." : "DEPLOY TO ARC MAINNET"}
-            </button>
+              {isSending ? "Deploying…" : "Deploy to Arc mainnet"}
+            </Button>
           </div>
         </CardBody>
       </Card>
@@ -525,7 +516,7 @@ function DeploymentScreen({
           <div className="mb-6">
             {phases.map((phase, index) => (
               <div key={phase.key} className="flex items-center gap-3 mb-3">
-                <div className={`flex items-center justify-center w-8 h-8 font-mono font-bold text-sm rounded-none border-2 transition-all ${
+                <div className={`flex items-center justify-center w-8 h-8 rounded-full text-sm font-semibold border transition-all ${
                   index < currentPhaseIndex ? "bg-success border-success text-success-foreground" :
                   index === currentPhaseIndex && !isComplete && !isError ? "bg-accent border-accent text-accent-foreground animate-pulse" :
                   isError && index === currentPhaseIndex ? "bg-destructive border-destructive text-destructive-foreground" :
@@ -540,10 +531,10 @@ function DeploymentScreen({
                   )}
                 </div>
                 <div>
-                  <div className={`font-mono font-bold text-sm uppercase ${index <= currentPhaseIndex ? "text-foreground" : "text-muted-foreground"}`}>
+                  <div className={`text-sm font-semibold ${index <= currentPhaseIndex ? "text-foreground" : "text-muted-foreground"}`}>
                     {phase.label}
                   </div>
-                  <div className="text-xs text-muted-foreground font-mono">{phase.description}</div>
+                  <div className="text-xs text-muted-foreground">{phase.description}</div>
                 </div>
                 {deployment.createTxHash && phase.key === "create" && (
                   <a 
@@ -580,27 +571,27 @@ function DeploymentScreen({
           </div>
 
           {isError && (
-            <div className="p-4 border-2 border-destructive bg-destructive/10 text-destructive text-sm font-mono">
-              <div className="flex items-center gap-2 mb-1">
+            <div className="rounded-lg border border-destructive bg-destructive/10 p-4 text-sm text-destructive">
+              <div className="mb-1 flex items-center gap-2">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
                   <circle cx={12} cy={12} r={10} />
                   <line x1={15} y1={9} x2={9} y2={15} />
                   <line x1={9} y1={9} x2={15} y2={15} />
                 </svg>
-                <span className="font-bold tracking-[0.1em] uppercase">Deployment failed</span>
+                <span className="font-semibold">Deployment failed</span>
               </div>
               <p className="ml-6">{deployment.error}</p>
             </div>
           )}
 
           {isComplete && (
-            <div className="p-4 border-2 border-success bg-success/10 text-success text-sm font-mono">
+            <div className="rounded-lg border border-success bg-success/10 p-4 text-sm text-success">
               <div className="flex items-center gap-2 mb-2">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
                   <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
                   <polyline points="22 4 12 14.01 9 11.01" />
                 </svg>
-                <span className="font-bold tracking-[0.1em] uppercase">DEPLOYMENT COMPLETE</span>
+                <span className="font-semibold">Deployment complete</span>
               </div>
               <div className="ml-6 space-y-1">
                 <p>Flow ID: <span className="font-bold">#{deployment.flowId?.toString()}</span></p>
@@ -611,26 +602,22 @@ function DeploymentScreen({
           )}
 
           {deployment.phase !== "complete" && deployment.phase !== "error" && (
-            <div className="mt-6 p-4 border border-border bg-background text-center">
-              <div className="flex items-center justify-center gap-2 text-sm font-mono">
+            <div className="mt-6 rounded-lg border border-border bg-card p-4 text-center">
+              <div className="flex items-center justify-center gap-2 text-sm">
                 <svg className="animate-spin" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                   <circle cx="12" cy="12" r="10" strokeOpacity="0.25" />
                   <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round" />
                 </svg>
-                <span>Waiting for transaction confirmation...</span>
+                <span>Waiting for transaction confirmation…</span>
               </div>
             </div>
           )}
 
           <div className="mt-6 flex flex-col sm:flex-row gap-3 justify-center">
             {deployment.phase === "complete" || deployment.phase === "error" ? (
-              <button
-                type="button"
-                onClick={onBack}
-                className="flex-1 sm:flex-none px-6 py-3 border-2 border-border bg-background text-foreground font-mono text-xs tracking-[0.1em] uppercase hover:border-foreground hover:bg-muted transition-colors"
-              >
-                BACK TO EDIT
-              </button>
+              <Button variant="outline" onClick={onBack}>
+                Back to edit
+              </Button>
             ) : null}
           </div>
         </CardBody>

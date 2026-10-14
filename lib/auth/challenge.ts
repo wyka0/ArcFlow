@@ -2,7 +2,7 @@ import type { Address } from "viem";
 
 /**
  * Build the EIP-191 personal_sign message a wallet must sign to authenticate
- * with AgentPay.
+ * with ArcFlow.
  *
  * The message explicitly states:
  *   - it is an authentication/login signature
@@ -29,7 +29,7 @@ export function buildAuthMessage(input: {
   challengeId: string;
 }): string {
   const lines = [
-    "Sign in to AgentPay",
+    "Sign in to ArcFlow",
     "",
     "This signature proves wallet ownership for authentication.",
     "It does NOT authorize a blockchain transaction.",
@@ -46,7 +46,7 @@ export function buildAuthMessage(input: {
 }
 
 /** Parse the human-readable header line out of a message (for tests). */
-export const AUTH_MESSAGE_HEADER = "Sign in to AgentPay";
+export const AUTH_MESSAGE_HEADER = "Sign in to ArcFlow";
 
 /** The statement the user sees, surfaced for documentation and tests. */
 export const AUTH_MESSAGE_DISCLAIMER =

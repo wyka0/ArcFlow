@@ -1,9 +1,10 @@
 /**
- * Shared AgentPay brand mark.
+ * Shared ArcFlow brand mark.
  *
- * Angular A/P monogram with a vertical payment-flow accent line
- * and an orange terminal dot. Used in the landing nav, the app
- * header, and any other surface that shows the AgentPay wordmark.
+ * A workflow-split glyph: one incoming payment node branching into two
+ * recipient nodes, with an ArcFlow-orange accent node. Used in the landing
+ * page, the app header, and any other surface that shows the ArcFlow
+ * wordmark.
  */
 export function BrandMark({
   size = 24,
@@ -25,11 +26,16 @@ export function BrandMark({
       className={className ?? "text-foreground"}
       aria-hidden="true"
     >
-      {/* AgentPay mark: Angular A/P monogram with payment flow arrow */}
-      <path d="M6 18L12 6L18 18" strokeWidth={2.5} />
-      <path d="M6 13H18" strokeWidth={2.5} />
-      <path d="M12 6V18" strokeWidth={1.5} stroke="#EA580C" strokeLinecap="round" />
-      <circle cx={12} cy={18} r={1.5} fill="#EA580C" />
+      {/* ArcFlow mark: payment in, split out to two recipients */}
+      <circle cx={4} cy={12} r={2} strokeWidth={2} />
+      <circle cx={20} cy={6} r={2} strokeWidth={2} />
+      <circle cx={20} cy={18} r={2} strokeWidth={2} />
+      {/* Input node accent (brand orange) */}
+      <circle cx={4} cy={12} r={0.75} fill="#EA580C" stroke="none" />
+      <path d="M6 12C10 12 12 12 13.5 10.5" strokeWidth={1.75} />
+      <path d="M6 12C10 12 12 12 13.5 13.5" strokeWidth={1.75} />
+      <path d="M15.6 9.6L18 7.2" strokeWidth={1.75} />
+      <path d="M15.6 14.4L18 16.8" strokeWidth={1.75} />
     </svg>
   );
 }

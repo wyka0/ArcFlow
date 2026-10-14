@@ -9,12 +9,12 @@ interface StepNumberProps {
 export function StepNumber({ number, active = false, completed = false }: StepNumberProps) {
   return (
     <div
-      className={`flex items-center justify-center w-10 h-10 font-mono font-bold text-[14px] transition-all duration-200 ${
+      className={`flex items-center justify-center w-10 h-10 rounded-full font-semibold text-sm transition-all duration-200 ${
         completed
           ? "bg-success text-success-foreground"
           : active
-          ? "bg-foreground text-background"
-          : "bg-muted text-muted-foreground border-2 border-border"
+          ? "bg-primary text-primary-foreground"
+          : "bg-muted text-muted-foreground border border-border"
       }`}
       aria-hidden="true"
     >
@@ -61,12 +61,12 @@ export function StepHeader({ number, label, description, active = false, complet
         <StepConnector active={active} completed={completed} />
       </div>
       <div className="flex-1 min-w-0 pt-1">
-        <h3 className={`font-mono font-bold text-sm tracking-[0.1em] uppercase transition-colors ${
+        <h3 className={`text-sm font-semibold transition-colors ${
           completed ? "text-success" : active ? "text-foreground" : "text-muted-foreground"
         }`}>
           {label}
         </h3>
-        <p className="mt-1 text-xs text-muted-foreground font-mono">{description}</p>
+        <p className="mt-1 text-xs text-muted-foreground">{description}</p>
       </div>
     </div>
   );

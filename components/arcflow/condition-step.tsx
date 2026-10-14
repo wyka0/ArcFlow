@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useRef, type ChangeEvent, type FocusEvent } from "react";
 import { Card, CardBody } from "@/components/card";
@@ -63,7 +63,7 @@ export function ConditionStep({ condition, onChange, onBlur, active, completed, 
         />
         <div className="mt-6 space-y-4">
           <div>
-            <label htmlFor="condition-operator" className="block text-xs font-mono tracking-[0.1em] uppercase text-muted-foreground mb-2">
+            <label htmlFor="condition-operator" className="mb-2 block text-xs font-medium text-muted-foreground">
               Operator
             </label>
             <div className="flex items-center gap-3">
@@ -72,24 +72,24 @@ export function ConditionStep({ condition, onChange, onBlur, active, completed, 
                   key={op.value}
                   type="button"
                   onClick={() => handleOperatorChange(op.value)}
-                  className={`flex items-center gap-2 px-4 py-2.5 border-2 rounded-none font-mono text-sm transition-all duration-200 ${
+                  className={`flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm transition-all duration-200 ${
                     condition.operator === op.value
-                      ? "border-foreground bg-foreground text-background"
-                      : "border-border bg-background text-foreground hover:border-foreground"
+                      ? "bg-primary text-primary-foreground"
+                      : "border border-border bg-card text-foreground hover:border-accent"
                   }`}
                   role="radio"
                   aria-checked={condition.operator === op.value}
                   aria-label={op.description}
                 >
-                  <span className="text-xl font-bold">{op.label}</span>
-                  <span className="text-xs tracking-[0.1em] uppercase">{op.description}</span>
+                  <span className="text-lg font-semibold">{op.label}</span>
+                  <span className="text-xs">{op.description}</span>
                 </button>
               ))}
             </div>
           </div>
 
           <div>
-            <label htmlFor="condition-amount" className="block text-xs font-mono tracking-[0.1em] uppercase text-muted-foreground mb-2">
+            <label htmlFor="condition-amount" className="mb-2 block text-xs font-medium text-muted-foreground">
               Amount (USDC)
             </label>
             <div className="relative flex items-center gap-3">
@@ -102,8 +102,8 @@ export function ConditionStep({ condition, onChange, onBlur, active, completed, 
                 onChange={handleAmountChange}
                 onBlur={handleAmountBlur}
                 placeholder="10.00"
-                className={`flex-1 px-4 py-3 border-2 rounded-none font-mono text-lg bg-background transition-all duration-200 ${
-                  hasError ? "border-destructive focus:border-destructive" : "border-border focus:border-foreground"
+                className={`flex-1 rounded-lg border bg-card px-4 py-3 font-mono text-base transition-all duration-200 ${
+                  hasError ? "border-destructive focus:border-destructive" : "border-border focus:border-accent"
                 }`}
                 aria-invalid={hasError}
                 aria-describedby={hasError ? "condition-amount-error" : undefined}
