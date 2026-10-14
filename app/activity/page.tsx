@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Clock, CheckCircle, AlertCircle, Loader2, History } from "lucide-react";
-import { formatAddress } from "@/types";
+import { AlertCircle, Loader2, History, LogIn } from "lucide-react";
+
+import { useAuth } from "@/components/auth-provider";
 import { Card, CardBody } from "@/components/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -44,38 +45,56 @@ interface ActivityData {
   persistence: { kind: string; durable: boolean; label: string; note: string };
 }
 
+type ActivityError =
+  | { kind: "unauthenticated"; message: string }
+  | { kind: "api"; message: string };
+
 export default function ActivityPage() {
+  const auth = useAuth();
   const [data, setData] = useState<ActivityData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ActivityError | null>(null);
+
+  const fetchActivity = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/payments/history", {
+        cache: "no-store",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        if (res.status === 401) {
+          setError({ kind: "unauthenticated", message: "Sign in to view your payment history." });
+        } else {
+          const err = await res.json().catch(() => ({}));
+          const msg =
+            (err as { error?: { message?: string } })?.error?.message ??
+            "Failed to load payment history.";
+          setError({ kind: "api", message: msg });
+        }
+        return;
+      }
+      const json = await res.json();
+      if (json.ok) {
+        setData(json);
+      } else {
+        setError({
+          kind: "api",
+          message: json.error?.message ?? "Failed to load payment history.",
+        });
+      }
+    } catch {
+      setError({ kind: "api", message: "Network error. Please try again." });
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    async function fetchActivity() {
-      try {
-        const res = await fetch("/api/payments/history", { cache: "no-store" });
-        if (!res.ok) {
-          if (res.status === 401) {
-            setError("Sign in to view your payment history.");
-          } else {
-            const err = await res.json().catch(() => ({}));
-            setError(err.error?.message ?? "Failed to load payment history.");
-          }
-          return;
-        }
-        const json = await res.json();
-        if (json.ok) {
-          setData(json);
-        } else {
-          setError(json.error?.message ?? "Failed to load payment history.");
-        }
-      } catch {
-        setError("Network error. Please try again.");
-      } finally {
-        setLoading(false);
-      }
-    }
-    fetchActivity();
-  }, []);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void fetchActivity();
+  }, [fetchActivity, auth.status]);
 
   if (loading) {
     return (
@@ -94,23 +113,37 @@ export default function ActivityPage() {
   }
 
   if (error) {
+    const isUnauth = error.kind === "unauthenticated";
     return (
       <div className="mx-auto w-full max-w-5xl p-4 pb-16 md:p-6">
         <div className="mb-6">
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Activity</h1>
           <p className="mt-1 text-sm text-muted-foreground">Your payment history and flow executions</p>
         </div>
-        <Card variant="primary" className="border-destructive">
+        <Card>
           <CardBody className="p-6">
-            <div className="flex items-center gap-3 text-destructive">
-              <AlertCircle className="size-5" />
-              <span className="font-medium">Unable to load activity</span>
+            <div className="flex items-center gap-3">
+              {isUnauth ? (
+                <LogIn className="size-5 text-accent" />
+              ) : (
+                <AlertCircle className="size-5 text-destructive" />
+              )}
+              <span className={`font-medium ${isUnauth ? "text-foreground" : "text-destructive"}`}>
+                {isUnauth ? "Sign in required" : "Unable to load activity"}
+              </span>
             </div>
-            <p className="mt-2 text-sm text-muted-foreground">{error}</p>
-            <div className="mt-4">
-              <Button variant="outline" onClick={() => window.location.reload()}>
-                Try again
-              </Button>
+            <p className="mt-2 text-sm text-muted-foreground">{error.message}</p>
+            <div className="mt-4 flex items-center gap-3">
+              {isUnauth ? (
+                <p className="text-xs text-muted-foreground">
+                  Connect your wallet in the header, then click &ldquo;Sign In&rdquo; to
+                  authenticate with your wallet.
+                </p>
+              ) : (
+                <Button variant="outline" onClick={() => void fetchActivity()}>
+                  Try again
+                </Button>
+              )}
             </div>
           </CardBody>
         </Card>

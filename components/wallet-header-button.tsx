@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Loader2 } from "lucide-react";
 
-import { useAuth } from "@/components/auth-provider";
+import { useAuth, useInjectedSignMessage } from "@/components/auth-provider";
 import { useWallet } from "@/components/wallet-provider";
 import { shortenAddress } from "@/lib/wallet/state";
 
@@ -25,18 +25,21 @@ const DROPDOWN_ITEM =
  * - Connected, not authenticated: shortened address (dropdown: Switch Network, Sign In, Disconnect)
  * - Authenticated: shortened address with chevron (dropdown: Sign Out, Disconnect)
  *
- * Sign In is an explicit action that opens the wallet signing flow.
- * The header never auto-authenticates on wallet connection.
+ * Sign In triggers the full challenge → sign → verify flow using the
+ * injected wallet. It never auto-authenticates on wallet connection.
  */
 export function WalletHeaderButton() {
   const { session, connection, connect, disconnect, switchNetwork, isConnecting } = useWallet();
   const auth = useAuth();
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [signInBusy, setSignInBusy] = useState(false);
+  const [signInError, setSignInError] = useState<string | null>(null);
   const address = session.wallet.address;
 
   const walletConnected = connection === "connected" || connection === "wrong-network";
   const wrongNetwork = connection === "wrong-network";
   const authenticated = auth.status === "authenticated" && auth.session;
+  const injected = useInjectedSignMessage(address);
 
   const toggleDropdown = () => setDropdownOpen((prev) => !prev);
   const closeDropdown = () => setDropdownOpen(false);
@@ -54,6 +57,23 @@ export function WalletHeaderButton() {
   const handleSwitchNetwork = async () => {
     closeDropdown();
     await switchNetwork();
+  };
+
+  const handleSignIn = async () => {
+    closeDropdown();
+    if (!address || !injected) {
+      setSignInError("Connect your wallet first.");
+      return;
+    }
+    setSignInBusy(true);
+    setSignInError(null);
+    try {
+      await auth.signIn({ walletAddress: address, signMessage: injected });
+    } catch (err) {
+      setSignInError(err instanceof Error ? err.message : "Sign-in failed.");
+    } finally {
+      setSignInBusy(false);
+    }
   };
 
   // No wallet or not connected: show Connect Wallet
@@ -96,6 +116,27 @@ export function WalletHeaderButton() {
         </span>
       </button>
 
+      {signInBusy && (
+        <span className="absolute right-0 top-full mt-2 z-20 flex min-w-[176px] items-center gap-2 rounded-lg border border-border bg-popover p-3 text-sm text-muted-foreground shadow-md">
+          <Loader2 className="size-4 animate-spin" />
+          Signing in…
+        </span>
+      )}
+
+      {!signInBusy && signInError && (
+        <span className="absolute right-0 top-full mt-2 z-20 flex min-w-[200px] flex-col gap-2 rounded-lg border border-destructive bg-popover p-3 text-sm text-destructive shadow-md">
+          <span className="font-medium">Sign-in failed</span>
+          <span className="text-xs text-muted-foreground">{signInError}</span>
+          <button
+            className="self-start text-xs text-accent hover:underline"
+            onClick={() => setSignInError(null)}
+            type="button"
+          >
+            Dismiss
+          </button>
+        </span>
+      )}
+
       {dropdownOpen && (
         <div className={DROPDOWN} role="menu">
           {wrongNetwork && (
@@ -111,12 +152,7 @@ export function WalletHeaderButton() {
           {!authenticated && (
             <button
               className={DROPDOWN_ITEM}
-              onClick={() => {
-                closeDropdown();
-                // Navigate to main content where Sign In is available
-                // The main app content will render the Sign In action
-                document.getElementById("sign-in-section")?.scrollIntoView({ behavior: "smooth" });
-              }}
+              onClick={() => void handleSignIn()}
               role="menuitem"
               type="button"
             >
