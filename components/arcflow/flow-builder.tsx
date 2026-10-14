@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import { Card, CardBody } from "@/components/card";
 import { Button } from "@/components/ui/button";
 import { useWallet } from "@/components/wallet-provider";
+import { isArcFlowConfigured } from "@/lib/arcflow/contract";
 import { useTransactionSender } from "./use-transaction-sender";
 import type { Flow, FlowValidationError } from "@/types/flow";
 import { validateFlow, DEFAULT_FLOW } from "@/types/flow";
@@ -57,10 +58,11 @@ export function FlowBuilder({ initialFlow, onActivate }: FlowBuilderProps) {
   const walletAddress = session.wallet.address;
   const isWalletConnected = connection === "connected" || connection === "wrong-network";
   const isWrongNetwork = connection === "wrong-network";
+  const contractConfigured = useMemo(() => isArcFlowConfigured(network), [network]);
 
   const canDeploy = useMemo(
-    () => isWalletConnected && !isWrongNetwork && !!walletAddress && validateAll(),
-    [isWalletConnected, isWrongNetwork, walletAddress, errors, flow],
+    () => contractConfigured && isWalletConnected && !isWrongNetwork && !!walletAddress && validateAll(),
+    [contractConfigured, isWalletConnected, isWrongNetwork, walletAddress, errors, flow],
   );
 
   const updateFlow = useCallback(<K extends keyof Partial<Flow>>(key: K, value: Partial<Flow>[K]) => {
@@ -126,6 +128,7 @@ export function FlowBuilder({ initialFlow, onActivate }: FlowBuilderProps) {
 
   const handleDeploy = useCallback(async () => {
     if (!canDeploy) return;
+    if (!isArcFlowConfigured(network)) return;
 
     setDeployment({ phase: "create" });
 
@@ -195,7 +198,7 @@ export function FlowBuilder({ initialFlow, onActivate }: FlowBuilderProps) {
         error: error instanceof Error ? error.message : "Deployment failed" 
       }));
     }
-  }, [canDeploy, sendTransaction]);
+  }, [canDeploy, sendTransaction, network]);
 
   const isStepCompleted = (step: Step) => {
     const index = stepOrder.indexOf(step);
@@ -268,6 +271,7 @@ export function FlowBuilder({ initialFlow, onActivate }: FlowBuilderProps) {
               onBack={handleBackToEdit} 
               onDeploy={handleDeploy}
               canDeploy={canDeploy}
+              contractConfigured={contractConfigured}
               walletConnected={isWalletConnected}
               wrongNetwork={isWrongNetwork}
               isSending={isSending}
@@ -376,6 +380,7 @@ function ReviewScreen({
   onBack, 
   onDeploy, 
   canDeploy, 
+  contractConfigured,
   walletConnected, 
   wrongNetwork,
   isSending
@@ -384,6 +389,7 @@ function ReviewScreen({
   onBack: () => void; 
   onDeploy: () => void;
   canDeploy: boolean;
+  contractConfigured: boolean;
   walletConnected: boolean;
   wrongNetwork: boolean;
   isSending: boolean;
@@ -404,8 +410,14 @@ function ReviewScreen({
                 <polyline points="22 4 12 14.01 9 11.01" />
               </svg>
             </div>
-            <h2 className="text-xl font-semibold text-success">Ready for deployment</h2>
-            <p className="mt-2 text-sm text-muted-foreground">Your workflow is valid. Connect wallet and deploy to Arc mainnet.</p>
+            <h2 className="text-xl font-semibold text-success">
+              {contractConfigured ? "Ready for deployment" : "Flow review"}
+            </h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {contractConfigured
+                ? "Your workflow is valid. Connect wallet and deploy to Arc mainnet."
+                : "Your workflow is valid. Deployment is disabled in this configuration."}
+            </p>
           </div>
 
           <div className="space-y-4 text-sm">
@@ -437,6 +449,23 @@ function ReviewScreen({
               </div>
             </div>
           </div>
+
+          {!contractConfigured && (
+            <div className="rounded-lg border border-info bg-info/10 p-4 text-xs text-info">
+              <div className="mb-1 flex items-center gap-2">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx={12} cy={12} r={10} />
+                  <line x1={12} y1={16} x2={12} y2={12} />
+                  <line x1={12} y1={8} x2={12.01} y2={8} />
+                </svg>
+                <span className="font-semibold">Public review mode</span>
+              </div>
+              <p className="ml-6">
+                Flow deployment is disabled because no production contract is configured.
+                You can explore the flow builder, but no flow will be submitted on-chain.
+              </p>
+            </div>
+          )}
 
           {!walletConnected && (
             <div className="rounded-lg border border-warning bg-warning/10 p-4 text-xs text-warning">
@@ -474,8 +503,9 @@ function ReviewScreen({
               onClick={onDeploy}
               disabled={!canDeploy || isSending}
               className="bg-success text-success-foreground hover:bg-success/90 sm:flex-none"
+              title={contractConfigured ? undefined : "No production contract configured — deployment is disabled."}
             >
-              {isSending ? "Deploying…" : "Deploy to Arc mainnet"}
+              {isSending ? "Deploying…" : contractConfigured ? "Deploy to Arc mainnet" : "Deployment unavailable"}
             </Button>
           </div>
         </CardBody>
