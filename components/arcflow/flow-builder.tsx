@@ -304,7 +304,7 @@ export function FlowBuilder({ initialFlow, onActivate }: FlowBuilderProps) {
               {/* Navigation */}
               <div className="mt-8 flex items-center justify-between pt-6 border-t border-border">
                 <Button
-                  variant="outline"
+                  variant="ghost"
                   onClick={handleBack}
                   disabled={currentStepIndex === 0}
                 >

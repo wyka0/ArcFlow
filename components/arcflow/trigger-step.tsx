@@ -28,7 +28,7 @@ export function TriggerStep({ active, completed }: TriggerStepProps) {
         <div className="mt-6">
           <div
             className={`flex items-center gap-4 p-4 border rounded-lg transition-all duration-200 ${
-              active ? "border-accent bg-accent/5" : "border-border bg-muted/50"
+              active ? "border-accent/40 bg-accent/5" : "border-border bg-muted/50"
             }`}
             role="radiogroup"
             aria-label="Select trigger"
@@ -36,11 +36,11 @@ export function TriggerStep({ active, completed }: TriggerStepProps) {
             <div className="flex items-center gap-3 flex-1">
               <div
                 className={`w-5 h-5 border rounded-full flex items-center justify-center transition-all duration-200 ${
-                  active ? "border-primary bg-primary" : "border-border bg-transparent"
+                  active ? "border-primary/60 bg-primary/10" : "border-border bg-transparent"
                 }`}
                 aria-hidden="true"
               >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" className="text-primary-foreground">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" className="text-primary/70">
                   <path d="M21 12.79A9 9 0 1 1 14.21 3 7 7 0 0 0 21 12.79z" />
                 </svg>
               </div>

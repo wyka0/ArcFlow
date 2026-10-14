@@ -3,6 +3,7 @@
 import { useCallback, type ChangeEvent, type FocusEvent } from "react";
 import { Card, CardBody } from "@/components/card";
 import { StepHeader } from "./step-indicator";
+import { Button } from "@/components/ui/button";
 import type { FlowAction, Address } from "@/types/flow";
 import { isValidAddress } from "@/types/flow";
 
@@ -101,14 +102,15 @@ export function ActionStep({ actions, onChange, onBlur, active, completed, error
         <div className="mt-6 space-y-4">
           <div className="flex items-center justify-between">
             <h4 className="text-xs font-medium text-muted-foreground">Recipients</h4>
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={handleAddAction}
               disabled={actions.length >= 5 || !active}
-              className="text-xs font-medium text-accent transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
             >
               + Add recipient
-            </button>
+            </Button>
           </div>
 
           <div className="space-y-3" role="list" aria-label="Payment recipients">
