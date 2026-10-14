@@ -54,7 +54,7 @@ export function TriggerStep({ active, completed }: TriggerStepProps) {
         </div>
         {active && (
           <p className="mt-4 text-xs text-muted-foreground">
-            Additional triggers (schedule, contract event, webhook) will be available in future phases.
+            Currently supports Payment Received triggers.
           </p>
         )}
       </CardBody>
