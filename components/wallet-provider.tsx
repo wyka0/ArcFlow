@@ -60,41 +60,81 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const network = useMemo(() => getActiveArcNetwork(), []);
 
   useEffect(() => {
-    const provider = getInjectedProvider();
-    providerRef.current = provider;
+    let cancelled = false;
+    let retryCount = 0;
+    const MAX_RETRIES = 20; // ~10 seconds at 500ms intervals
+    const RETRY_MS = 500;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let unsubscribe: (() => void) | undefined;
+    let generation = 0; // Prevents stale async responses from overwriting newer state
 
-    if (!provider) {
-      dispatch({ type: "provider/missing" });
-      return;
+    function attemptDetect(): void {
+      if (cancelled) return;
+      if (providerRef.current) return; // Already detected — no duplicate
+
+      const provider = getInjectedProvider();
+
+      if (!provider) {
+        if (retryCount < MAX_RETRIES) {
+          retryCount++;
+          retryTimer = setTimeout(attemptDetect, RETRY_MS);
+          return;
+        }
+        // Retries exhausted — wallet is truly not installed
+        dispatch({ type: "provider/missing" });
+        return;
+      }
+
+      // Provider found — run existing detection and subscription logic
+      providerRef.current = provider;
+      dispatch({ type: "provider/detected" });
+
+      const currentGeneration = ++generation;
+
+      void (async () => {
+        try {
+          const [accounts, chainId] = await Promise.all([getAccounts(provider), getChainId(provider)]);
+          if (cancelled || generation !== currentGeneration) return;
+          const address = accounts[0];
+          if (address) {
+            dispatch({ type: "connect/succeeded", address, chainId });
+          } else {
+            dispatch({ type: "chain/changed", chainId });
+          }
+        } catch {
+          if (!cancelled && generation === currentGeneration) {
+            dispatch({ type: "wallet/error/clear" });
+          }
+        }
+      })();
+
+      unsubscribe = subscribeProvider(provider, {
+        onAccountsChanged: (accounts) =>
+          dispatch({ type: "accounts/changed", address: accounts[0] ?? null }),
+        onChainChanged: (chainId) => dispatch({ type: "chain/changed", chainId }),
+      });
     }
 
-    dispatch({ type: "provider/detected" });
+    // Check immediately on mount
+    attemptDetect();
 
-    let cancelled = false;
-    void (async () => {
-      try {
-        const [accounts, chainId] = await Promise.all([getAccounts(provider), getChainId(provider)]);
-        if (cancelled) return;
-        const address = accounts[0];
-        if (address) {
-          dispatch({ type: "connect/succeeded", address, chainId });
-        } else {
-          dispatch({ type: "chain/changed", chainId });
-        }
-      } catch {
-        if (!cancelled) dispatch({ type: "wallet/error/clear" });
+    // Listen for the MetaMask-style initialization event for faster detection
+    function onEthereumInitialized(): void {
+      if (cancelled) return;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = undefined;
       }
-    })();
-
-    const unsubscribe = subscribeProvider(provider, {
-      onAccountsChanged: (accounts) =>
-        dispatch({ type: "accounts/changed", address: accounts[0] ?? null }),
-      onChainChanged: (chainId) => dispatch({ type: "chain/changed", chainId }),
-    });
+      retryCount = 0; // Reset so future retries can still occur if this event fires early
+      attemptDetect();
+    }
+    window.addEventListener("ethereum#initialized", onEthereumInitialized, { once: true });
 
     return () => {
       cancelled = true;
-      unsubscribe();
+      if (retryTimer) clearTimeout(retryTimer);
+      window.removeEventListener("ethereum#initialized", onEthereumInitialized);
+      unsubscribe?.();
     };
   }, []);
 
