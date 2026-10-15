@@ -57,6 +57,34 @@ describe("wallet session — connected state", () => {
     expect(selectConnectionDisplay(state, ARC_MAINNET)).toBe("connected");
   });
 
+  it("clears previous error on successful connection", () => {
+    const erroredState = walletSessionReducer(initialWalletSessionState, {
+      type: "connect/failed",
+      error: { code: "USER_REJECTED", message: "User rejected the connection request." },
+    });
+    expect(walletSessionReducer(erroredState, { type: "connect/succeeded", address: ADDRESS, chainId: ARC_MAINNET.chainId }).wallet.error).toBeNull();
+  });
+
+  it("stores error on connection failure", () => {
+    const erroredState = walletSessionReducer(initialWalletSessionState, {
+      type: "connect/failed",
+      error: { code: "USER_REJECTED", message: "User rejected the connection request." },
+    });
+    expect(erroredState.wallet.error).not.toBeNull();
+    expect(erroredState.wallet.error?.code).toBe("USER_REJECTED");
+    expect(erroredState.wallet.error?.message).toBe("User rejected the connection request.");
+  });
+
+  it("clears error when starting a new connection attempt", () => {
+    const erroredState = walletSessionReducer(initialWalletSessionState, {
+      type: "connect/failed",
+      error: { code: "USER_REJECTED", message: "User rejected the connection request." },
+    });
+    const retryState = walletSessionReducer(erroredState, { type: "connect/start" });
+    expect(retryState.wallet.error).toBeNull();
+    expect(retryState.wallet.status).toBe("connecting");
+  });
+
   it("starts reading the balance once connected on the right chain", () => {
     expect(selectBalanceDisplay(connectedState(), ARC_MAINNET)).toEqual({ kind: "reading" });
   });

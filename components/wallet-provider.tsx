@@ -48,6 +48,7 @@ export interface WalletContextValue {
   disconnect: () => void;
   switchNetwork: () => Promise<void>;
   refreshBalance: () => void;
+  clearError: () => void;
   providerRef: React.RefObject<Eip1193Provider | null>;
 }
 
@@ -185,6 +186,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
     providerRef.current = provider;
     dispatch({ type: "connect/start" });
+    dispatch({ type: "wallet/error/clear" });
 
     try {
       const accounts = await requestAccounts(provider);
@@ -217,6 +219,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   }, [network]);
 
+  const clearError = useCallback(() => {
+    dispatch({ type: "wallet/error/clear" });
+  }, []);
+
   const refreshBalance = useCallback(() => bumpRefresh(), []);
 
   const value = useMemo<WalletContextValue>(
@@ -231,9 +237,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       disconnect,
       switchNetwork,
       refreshBalance,
+      clearError,
       providerRef,
     }),
-    [session, network, connect, disconnect, switchNetwork, refreshBalance, providerRef],
+    [session, network, connect, disconnect, switchNetwork, refreshBalance, clearError, providerRef],
   );
 
   return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>;

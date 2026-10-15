@@ -29,12 +29,13 @@ const DROPDOWN_ITEM =
  * injected wallet. It never auto-authenticates on wallet connection.
  */
 export function WalletHeaderButton() {
-  const { session, connection, connect, disconnect, switchNetwork, isConnecting } = useWallet();
+  const { session, connection, connect, disconnect, switchNetwork, isConnecting, clearError } = useWallet();
   const auth = useAuth();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [signInBusy, setSignInBusy] = useState(false);
   const [signInError, setSignInError] = useState<string | null>(null);
   const address = session.wallet.address;
+  const connectionError = session.wallet.error;
 
   const walletConnected = connection === "connected" || connection === "wrong-network";
   const wrongNetwork = connection === "wrong-network";
@@ -79,23 +80,41 @@ export function WalletHeaderButton() {
   // No wallet or not connected: show Connect Wallet
   if (!walletConnected) {
     return (
-      <button
-        className={PRIMARY}
-        disabled={isConnecting || connection === "wallet-not-detected"}
-        onClick={() => void connect()}
-        type="button"
-        title={
-          connection === "wallet-not-detected"
-            ? "No injected EVM wallet was found in this browser."
-            : "Connect an injected EVM wallet (read-only)"
-        }
-      >
-        {connection === "wallet-not-detected"
-          ? "Wallet not detected"
-          : isConnecting
-          ? "Connecting…"
-          : "Connect Wallet"}
-      </button>
+      <>
+        {connectionError && (
+          <div className="absolute right-0 top-full mt-2 z-20 flex min-w-[200px] flex-col gap-2 rounded-lg border border-destructive bg-popover p-3 text-sm text-destructive shadow-md">
+            <span className="font-medium">Connection failed</span>
+            <span className="text-xs text-muted-foreground">{connectionError.message}</span>
+            <button
+              className="self-start text-xs text-accent hover:underline"
+              onClick={() => clearError()}
+              type="button"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+        <button
+          className={PRIMARY}
+          disabled={isConnecting || connection === "wallet-not-detected"}
+          onClick={() => {
+            clearError();
+            void connect();
+          }}
+          type="button"
+          title={
+            connection === "wallet-not-detected"
+              ? "No injected EVM wallet was found in this browser."
+              : "Connect an injected EVM wallet (read-only)"
+          }
+        >
+          {connection === "wallet-not-detected"
+            ? "Wallet not detected"
+            : isConnecting
+            ? "Connecting…"
+            : "Connect Wallet"}
+        </button>
+      </>
     );
   }
 
