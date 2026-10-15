@@ -8,7 +8,7 @@ import { useWallet } from "@/components/wallet-provider";
 import { isArcFlowConfigured } from "@/lib/arcflow/contract";
 import { useTransactionSender } from "./use-transaction-sender";
 import type { Flow, FlowValidationError } from "@/types/flow";
-import { validateFlow, DEFAULT_FLOW } from "@/types/flow";
+import { validateFlow, validateStep, DEFAULT_FLOW } from "@/types/flow";
 import { TriggerStep } from "./trigger-step";
 import { ConditionStep } from "./condition-step";
 import { ActionStep } from "./action-step";
@@ -78,10 +78,10 @@ export function FlowBuilder({ initialFlow, onActivate }: FlowBuilderProps) {
   }, [updateFlow]);
 
   const validateCurrentStep = useCallback(() => {
-    const validationErrors = validateFlow(flow);
-    setErrors(validationErrors);
-    return validationErrors.length === 0;
-  }, [flow]);
+    const stepErrors = validateStep(flow, currentStep);
+    setErrors(validateFlow(flow)); // store all errors for later display
+    return stepErrors.length === 0;
+  }, [flow, currentStep]);
 
   const validateCurrentStepRef = useRef(validateCurrentStep);
   useEffect(() => {
@@ -105,6 +105,8 @@ export function FlowBuilder({ initialFlow, onActivate }: FlowBuilderProps) {
   }, [flow]);
 
   const handleNext = useCallback(() => {
+    // Mark the current step as touched so validation errors become visible.
+    setTouched((prev) => ({ ...prev, [currentStep]: true }));
     if (validateCurrentStepRef.current()) {
       if (currentStepIndex < stepOrder.length - 1) {
         setCurrentStep(stepOrder[currentStepIndex + 1]);
@@ -112,7 +114,7 @@ export function FlowBuilder({ initialFlow, onActivate }: FlowBuilderProps) {
         setShowReview(true);
       }
     }
-  }, [currentStepIndex]);
+  }, [currentStepIndex, currentStep]);
 
   const handleBack = useCallback(() => {
     if (currentStepIndex > 0) {
@@ -304,6 +306,22 @@ export function FlowBuilder({ initialFlow, onActivate }: FlowBuilderProps) {
                   errors={touched.action ? errors.filter((e) => e.field.startsWith("action")).map((e) => e.message) : []}
                 />
               )}
+
+              {/* Step validation errors */}
+              {touched[currentStep] && (() => {
+                const stepErrs = validateStep(flow, currentStep);
+                if (stepErrs.length === 0) return null;
+                return (
+                  <div className="mt-4 rounded-lg border border-destructive bg-destructive/10 p-3 text-xs text-destructive">
+                    <span className="font-semibold">Please fix the following:</span>
+                    <ul className="mt-1 ml-4 list-disc">
+                      {stepErrs.map((e, i) => (
+                        <li key={i}>{e.message}</li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })()}
 
               {/* Navigation */}
               <div className="mt-8 flex items-center justify-between pt-6 border-t border-border">

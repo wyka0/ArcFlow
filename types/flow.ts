@@ -83,6 +83,37 @@ export function validateFlow(flow: Partial<Flow>): FlowValidationError[] {
   return errors;
 }
 
+/**
+ * Field prefixes that each wizard step is responsible for validating.
+ * The `name` field is intentionally excluded from step progression — it is
+ * only enforced by `validateFlow` at final review / deployment time.
+ */
+const STEP_FIELD_PREFIXES: Record<string, readonly string[]> = {
+  trigger: ["trigger"],
+  condition: ["trigger", "condition"],
+  action: ["trigger", "condition", "actions"],
+};
+
+/**
+ * Filter full-flow validation errors down to those that should block
+ * progression at the given wizard step.
+ *
+ * Example: on the "trigger" step, errors about action recipients
+ * ("actions[0].recipient") do not block Next — the user has not
+ * reached that step yet.
+ */
+export function validateStep(
+  flow: Partial<Flow>,
+  step: string,
+): FlowValidationError[] {
+  const all = validateFlow(flow);
+  // Fail-safe: for an unrecognized step, return ALL errors so progression
+  // is blocked rather than silently allowed.
+  const prefixes = STEP_FIELD_PREFIXES[step];
+  if (!prefixes) return all;
+  return all.filter((e) => prefixes.some((p) => e.field.startsWith(p)));
+}
+
 export function isValidAddress(address: string): address is Address {
   return /^0x[a-fA-F0-9]{40}$/.test(address);
 }
