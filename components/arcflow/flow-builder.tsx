@@ -8,12 +8,12 @@ import { useWallet } from "@/components/wallet-provider";
 import { isArcFlowConfigured } from "@/lib/arcflow/contract";
 import { useTransactionSender } from "./use-transaction-sender";
 import type { Flow, FlowValidationError } from "@/types/flow";
-import { validateFlow, validateStep, DEFAULT_FLOW } from "@/types/flow";
+import { validateFlow, validateStep, formatAddress, DEFAULT_FLOW } from "@/types/flow";
 import { TriggerStep } from "./trigger-step";
 import { ConditionStep } from "./condition-step";
 import { ActionStep } from "./action-step";
 import { FlowPreviewCard } from "./flow-preview";
-import { StepNumber } from "./step-indicator";
+import { StepHeader } from "./step-indicator";
 import { 
   prepareCreateFlowTx, 
   prepareApproveUsdcTx, 
@@ -226,29 +226,17 @@ export function FlowBuilder({ initialFlow, onActivate }: FlowBuilderProps) {
       <div className="flex items-center gap-2 mb-6 lg:mb-8" role="navigation" aria-label="Flow builder steps">
         {stepOrder.map((step, index) => {
           const labels: Record<Step, string> = { trigger: "Trigger", condition: "Condition", action: "Action", review: "Review", deploying: "Deploying" };
+          const isLast = index === stepOrder.length - 1;
           return (
-            <div key={step} className="flex items-center flex-1">
-              <StepNumber
-                number={index + 1}
-                active={isStepActive(step)}
-                completed={isStepCompleted(step)}
-              />
-              <span
-                className={`hidden sm:block text-center text-xs font-medium transition-colors ${
-                  isStepCompleted(step) ? "text-success" : isStepActive(step) ? "text-foreground" : "text-muted-foreground"
-                }`}
-              >
-                {labels[step]}
-              </span>
-              {index < stepOrder.length - 1 && (
-                <div
-                  className={`hidden lg:block h-px flex-1 transition-colors ${
-                    isStepCompleted(step) ? "bg-success" : "bg-border"
-                  }`}
-                  aria-hidden="true"
-                />
-              )}
-            </div>
+            <StepHeader
+              key={step}
+              number={index + 1}
+              label={labels[step]}
+              description="Configure your flow step"
+              active={isStepActive(step)}
+              completed={isStepCompleted(step)}
+              isLast={index === stepOrder.length - 1}
+            />
           );
         })}
       </div>
@@ -438,35 +426,41 @@ function ReviewScreen({
             </p>
           </div>
 
-          <div className="space-y-4 text-sm">
-            <div className="p-4 border border-border bg-background">
-              <div className="flex items-center gap-2 text-xs font-mono tracking-[0.1em] uppercase text-muted-foreground mb-2">
-                Trigger
-              </div>
-              <div className="font-mono text-foreground">Payment received</div>
-            </div>
-
-            <div className="p-4 border border-border bg-background">
-              <div className="flex items-center gap-2 text-xs font-mono tracking-[0.1em] uppercase text-muted-foreground mb-2">
-                Condition
-              </div>
-              <div className="font-mono text-foreground">≥ {flow.condition?.amount || "—"} USDC</div>
-            </div>
-
-            <div className="p-4 border border-border bg-background">
-              <div className="flex items-center gap-2 text-xs font-mono tracking-[0.1em] uppercase text-muted-foreground mb-2">
-                Actions
-              </div>
-              <div className="space-y-1 font-mono">
-                {flow.actions?.map((action, index) => (
-                  <div key={index} className="flex items-center justify-between">
-                    <span className="text-foreground">{action.percentage}%</span>
-                    <span className="text-muted-foreground">{action.recipient && action.recipient !== "0x" ? action.recipient.slice(0, 10) + "..." : "—"}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
+          <div className="space-y-6">
+        <div className="p-4 border border-border bg-background">
+          <div className="flex items-center gap-2 text-xs font-mono tracking-[0.1em] uppercase text-muted-foreground mb-2">
+            Trigger
           </div>
+          <div className="font-mono text-foreground">Payment received</div>
+        </div>
+
+        <div className="p-4 border border-border bg-background">
+          <div className="flex items-center gap-2 text-xs font-mono tracking-[0.1em] uppercase text-muted-foreground mb-2">
+            Condition
+          </div>
+          <div className="font-mono text-foreground">≥ {flow.condition?.amount || "—"} USDC</div>
+        </div>
+
+        <div className="p-4 border border-border bg-background">
+          <div className="flex items-center gap-2 text-xs font-mono tracking-[0.1em] uppercase text-muted-foreground mb-2">
+            Actions
+          </div>
+          <div className="space-y-3">
+            {flow.actions?.map((action, index) => (
+              <div key={index} className="flex items-center justify-between gap-4">
+                <div className="flex items-center gap-4 w-full max-w-xs">
+                  <div className="flex size-6 items-center justify-center rounded-md border border-border bg-muted">
+                    <span className="text-xs font-semibold text-foreground">{action.percentage}%</span>
+                  </div>
+                  <span className="font-mono text-sm text-muted-foreground truncate max-w-[240px]">
+                    {action.recipient && action.recipient !== "0x" ? formatAddress(action.recipient) : "—"}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+          </div>
+        </div>
 
           {!contractConfigured && (
             <div className="rounded-lg border border-info bg-info/10 p-4 text-xs text-info">
@@ -513,14 +507,14 @@ function ReviewScreen({
             </div>
           )}
 
-          <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
+          <div className="mt-8 flex flex-col gap-4 sm:flex-row sm:justify-center gap-4">
             <Button variant="outline" onClick={onBack} className="sm:flex-none">
               Back to edit
             </Button>
             <Button
               onClick={onDeploy}
               disabled={!canDeploy || isSending}
-              className="bg-success text-success-foreground hover:bg-success/90 sm:flex-none"
+              className="bg-success text-success-foreground hover:bg-success/90"
               title={contractConfigured ? undefined : "No production contract configured — deployment is disabled."}
             >
               {isSending ? "Deploying…" : contractConfigured ? "Deploy to Arc mainnet" : "Deployment unavailable"}

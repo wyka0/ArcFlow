@@ -37,8 +37,8 @@ interface StepConnectorProps {
 export function StepConnector({ active = false, completed = false }: StepConnectorProps) {
   return (
     <div
-      className={`relative flex-1 h-px transition-colors duration-200 ${
-        completed ? "bg-success" : active ? "bg-foreground" : "bg-border"
+      className={`flex-1 h-px transition-colors duration-200 ${
+        completed ? "bg-success" : active ? "bg-primary" : "bg-border"
       }`}
       aria-hidden="true"
     />
@@ -51,16 +51,26 @@ interface StepHeaderProps {
   description: string;
   active?: boolean;
   completed?: boolean;
+  isLast?: boolean;
 }
 
-export function StepHeader({ number, label, description, active = false, completed = false }: StepHeaderProps) {
+export function StepHeader({ number, label, description, active = false, completed = false, isLast = false }: StepHeaderProps) {
   return (
-    <div className="flex items-start gap-4">
-      <div className="flex flex-col items-center gap-2 flex-shrink-0">
-        <StepNumber number={number} active={active} completed={completed} />
-        <StepConnector active={active} completed={completed} />
+    <div className="flex items-center flex-1 relative">
+      <div className="relative flex items-center">
+        <div className="flex flex-col items-center gap-2 flex-shrink-0">
+          <StepNumber number={number} active={active} completed={completed} />
+          {!isLast && (
+            <div
+              className={`w-full h-px transition-colors duration-200 ${
+                completed ? "bg-success" : active ? "bg-primary" : "bg-border"
+              }`}
+              aria-hidden="true"
+            />
+          )}
+        </div>
       </div>
-      <div className="flex-1 min-w-0 pt-1">
+      <div className="flex-1 min-w-0 pt-1 pl-2">
         <h3 className={`text-sm font-semibold transition-colors ${
           completed ? "text-success" : active ? "text-foreground" : "text-muted-foreground"
         }`}>

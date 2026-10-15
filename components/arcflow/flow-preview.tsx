@@ -34,14 +34,14 @@ export function FlowPreview({ flow, compact = false }: FlowPreviewProps) {
     if (!actions?.length) return <span className="text-muted-foreground text-sm font-mono">No actions configured</span>;
 
     return (
-      <div className="space-y-2">
+      <div className="space-y-3">
         {actions.map((action, index) => (
-          <div key={index} className="flex items-center justify-center gap-3">
-            <div className="flex items-center gap-2">
+          <div key={index} className="flex items-center justify-center gap-4">
+            <div className="flex items-center gap-4 w-full max-w-xs">
               <div className="flex size-6 items-center justify-center rounded-md border border-border bg-muted">
                 <span className="text-xs font-semibold text-foreground">{action.percentage}%</span>
               </div>
-              <span className="font-mono text-sm text-muted-foreground">
+              <span className="font-mono text-sm text-muted-foreground truncate max-w-[240px]">
                 {action.recipient && action.recipient !== "0x" ? formatAddress(action.recipient) : "—"}
               </span>
             </div>
