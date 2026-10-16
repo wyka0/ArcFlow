@@ -16,9 +16,27 @@
 
 import type { Eip1193Provider } from "@/lib/wallet/client";
 import { getAccounts, getChainId } from "@/lib/wallet/client";
+import { toWalletError } from "@/lib/wallet/state";
 import type { MinimalReceiptLog, UsdcReceiptOutcome } from "@/lib/arc/payment";
 import type { PreparedTransaction } from "./interactions";
 import { checkWalletForSubmission, walletGuardFailureMessage } from "./wallet-guard";
+
+/**
+ * Run a raw provider interaction and, on failure, throw a user-safe error.
+ *
+ * Provider/RPC errors can carry verbose or implementation-specific text. We
+ * normalize ONLY at this boundary, using the existing wallet-error mapping, so
+ * a raw provider message never reaches the UI. Errors thrown by our own logic
+ * (guard, revert, unknown outcome) are raised outside this wrapper and are
+ * therefore never normalized a second time.
+ */
+async function viaProvider<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    throw new Error(toWalletError(error).message);
+  }
+}
 
 export interface SubmittedTransaction {
   transactionHash: `0x${string}`;
@@ -70,10 +88,11 @@ export async function submitTransaction(
   }
 
   // Pre-submission guard — re-check the chain and selected account immediately
-  // before every submission. Never switch either silently.
+  // before every submission. Never switch either silently. Provider reads are
+  // normalized so raw provider text cannot surface.
   const [currentChainId, currentAccounts] = await Promise.all([
-    getChainId(provider),
-    getAccounts(provider),
+    viaProvider(() => getChainId(provider)),
+    viaProvider(() => getAccounts(provider)),
   ]);
   const guardFailure = checkWalletForSubmission({
     expectedChainId: transaction.chainId,
@@ -82,21 +101,25 @@ export async function submitTransaction(
     currentChainId,
   });
   if (guardFailure) {
+    // Our own guard message — preserved as-is, never normalized.
     throw new Error(walletGuardFailureMessage(guardFailure));
   }
 
   // Standards-compatible EIP-1193 parameters (no non-standard `chainId`).
-  const hash = await provider.request({
-    method: "eth_sendTransaction",
-    params: [
-      {
-        from: expectedAccount,
-        to: transaction.to,
-        data: transaction.data,
-        value: "0x0",
-      },
-    ],
-  });
+  // A rejection/failure here is normalized to a user-safe message.
+  const hash = await viaProvider(() =>
+    provider.request({
+      method: "eth_sendTransaction",
+      params: [
+        {
+          from: expectedAccount,
+          to: transaction.to,
+          data: transaction.data,
+          value: "0x0",
+        },
+      ],
+    }),
+  );
 
   if (typeof hash !== "string" || !hash.startsWith("0x")) {
     throw new Error("Invalid transaction hash returned");

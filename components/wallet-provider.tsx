@@ -20,6 +20,7 @@ import {
   getChainId,
   getInjectedProvider,
   requestAccounts,
+  resetInjectedProviderSelection,
   subscribeProvider,
   switchToArcNetwork,
   type Eip1193Provider,
@@ -202,6 +203,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const disconnect = useCallback(() => {
+    // Clear any explicit multi-wallet choice so the picker can reappear and a
+    // reconnect cannot reuse a previously-bound provider.
+    resetInjectedProviderSelection();
     dispatch({ type: "disconnect" });
   }, []);
 

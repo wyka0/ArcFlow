@@ -3,6 +3,12 @@ import { isAddress, type Address } from "viem";
 import type { ArcNetwork } from "@/lib/arc/network";
 import { getArcRpcUrl } from "@/lib/arc/network";
 import { WalletClientError, getProviderErrorCode, parseChainId } from "./state";
+import {
+  describeInjectedProvider,
+  listInjectedProviders,
+  resolveInjectedProvider,
+  type InjectedProviderOption,
+} from "./providers";
 
 /**
  * Minimal EIP-1193 provider surface. Only the methods AgentPay needs for
@@ -21,19 +27,62 @@ interface InjectedWindow {
   ethereum?: Eip1193Provider & { providers?: Eip1193Provider[] };
 }
 
-/** Returns an injected EVM wallet provider, or null when none is present. */
-export function getInjectedProvider(): Eip1193Provider | null {
-  if (typeof window === "undefined") return null;
+export type { InjectedProviderOption };
+
+/**
+ * In-memory (never persisted) index of the provider the user explicitly chose.
+ * `null` means "no explicit choice".
+ */
+let selectedProviderIndex: number | null = null;
+
+/** All injected EIP-1193 providers, in a stable order. */
+export function getInjectedProviders(): Eip1193Provider[] {
+  if (typeof window === "undefined") return [];
   const injected = (window as unknown as InjectedWindow).ethereum;
-  if (!injected) return null;
-  if (Array.isArray(injected.providers) && injected.providers.length > 0) {
-    return injected.providers[0];
-  }
-  return injected;
+  return listInjectedProviders(injected);
 }
 
+/** Detected providers with display labels — for an explicit chooser. */
+export function getInjectedProviderOptions(): InjectedProviderOption[] {
+  return getInjectedProviders().map((provider, index) => ({
+    provider,
+    index,
+    label: describeInjectedProvider(provider, index),
+  }));
+}
+
+/** Record the user's explicit provider choice (in-memory only). */
+export function selectInjectedProvider(index: number): void {
+  selectedProviderIndex = index;
+}
+
+/** Clear the explicit choice (e.g. on disconnect). */
+export function resetInjectedProviderSelection(): void {
+  selectedProviderIndex = null;
+}
+
+/**
+ * True when more than one wallet is injected and no explicit choice has been
+ * made. The UI should ask the user which wallet to use rather than guessing.
+ */
+export function needsInjectedProviderSelection(): boolean {
+  return getInjectedProviders().length > 1 && selectedProviderIndex === null;
+}
+
+/**
+ * Returns the injected provider to use, or `null` when none is available.
+ *
+ * With a single wallet this is that wallet (unchanged behavior). With several,
+ * it is the explicitly selected one, or `null` until the user chooses — the app
+ * never silently assumes `providers[0]` is the user's preferred wallet.
+ */
+export function getInjectedProvider(): Eip1193Provider | null {
+  return resolveInjectedProvider(getInjectedProviders(), selectedProviderIndex);
+}
+
+/** True when at least one injected wallet is present (selection aside). */
 export function isWalletAvailable(): boolean {
-  return getInjectedProvider() !== null;
+  return getInjectedProviders().length > 0;
 }
 
 function normalizeAccounts(value: unknown): Address[] {

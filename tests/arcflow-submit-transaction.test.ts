@@ -37,15 +37,19 @@ interface ProviderCall {
 
 function makeProvider(overrides: {
   chainId?: string;
+  chainIdReject?: unknown;
   accounts?: () => string[];
+  accountsReject?: unknown;
   send?: () => unknown;
 } = {}) {
   const sends: unknown[][] = [];
   const request = vi.fn(async (args: ProviderCall) => {
     switch (args.method) {
       case "eth_chainId":
+        if (overrides.chainIdReject !== undefined) throw overrides.chainIdReject;
         return overrides.chainId ?? CHAIN_HEX;
       case "eth_accounts":
+        if (overrides.accountsReject !== undefined) throw overrides.accountsReject;
         return overrides.accounts ? overrides.accounts() : [A0];
       case "eth_sendTransaction":
         sends.push(args.params as unknown[]);
@@ -123,7 +127,7 @@ describe("submitTransaction — mocked EIP-1193 provider", () => {
     expect(sends).toHaveLength(0);
   });
 
-  it("propagates a user rejection and never waits for a receipt", async () => {
+  it("propagates a user rejection (4001) as the normalized safe message", async () => {
     const verify = vi.fn(async () => success);
     const { provider, sends } = makeProvider({
       send: () => {
@@ -132,9 +136,50 @@ describe("submitTransaction — mocked EIP-1193 provider", () => {
     });
     await expect(
       submitTransaction({ provider, transaction: TX_OBJ, expectedAccount: A0, verify }),
-    ).rejects.toThrow(/rejected/i);
+    ).rejects.toThrow("Request rejected in the wallet.");
     expect(sends).toHaveLength(1);
     expect(verify).not.toHaveBeenCalled();
+  });
+
+  it("normalizes a verbose provider error (no recognized code) to the generic safe message", async () => {
+    const rawText =
+      'Internal JSON-RPC error: {"code":-32603,"message":"execution reverted: 0xdeadbeef at 0x1234..."}';
+    const { provider, sends } = makeProvider({
+      send: () => {
+        throw new Error(rawText); // no numeric/known code
+      },
+    });
+    const error = (await submitTransaction({
+      provider,
+      transaction: TX_OBJ,
+      expectedAccount: A0,
+      verify: async () => success,
+    }).catch((e: unknown) => e)) as Error;
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toBe("The wallet request could not be completed.");
+    expect(error.message).not.toContain("Internal JSON-RPC error");
+    expect(error.message).not.toContain("0xdeadbeef");
+    expect(sends).toHaveLength(1);
+  });
+
+  it("aborts and sends nothing when the chain-id read fails", async () => {
+    const { provider, sends } = makeProvider({
+      chainIdReject: Object.assign(new Error("provider blew up: rpc detail"), { code: 4900 }),
+    });
+    await expect(
+      submitTransaction({ provider, transaction: TX_OBJ, expectedAccount: A0, verify: async () => success }),
+    ).rejects.toThrow("The wallet request could not be completed.");
+    expect(sends).toHaveLength(0);
+  });
+
+  it("aborts and sends nothing when the accounts read fails with a rejection", async () => {
+    const { provider, sends } = makeProvider({
+      accountsReject: Object.assign(new Error("User denied account access"), { code: 4001 }),
+    });
+    await expect(
+      submitTransaction({ provider, transaction: TX_OBJ, expectedAccount: A0, verify: async () => success }),
+    ).rejects.toThrow("Request rejected in the wallet.");
+    expect(sends).toHaveLength(0);
   });
 
   it("treats a malformed hash as an error", async () => {
@@ -167,6 +212,7 @@ describe("submitTransaction — mocked EIP-1193 provider", () => {
     }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(UnknownTransactionOutcomeError);
     expect((error as Error).message).toMatch(/confirmation unknown/i);
+    expect((error as Error).message).toMatch(/timed out waiting/i); // verify message preserved verbatim
     expect((error as UnknownTransactionOutcomeError).transactionHash).toBe(TX);
     // Never auto-retried.
     expect(sends).toHaveLength(1);

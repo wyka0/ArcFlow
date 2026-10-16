@@ -1,6 +1,8 @@
 "use client";
 
 import { useWallet } from "@/components/wallet-provider";
+import { WalletProviderPicker } from "@/components/wallet-provider-picker";
+import { needsInjectedProviderSelection } from "@/lib/wallet/client";
 import { shortenAddress } from "@/lib/wallet/state";
 
 const PRIMARY =
@@ -32,6 +34,8 @@ export function WalletConnectButton() {
               Disconnect
             </button>
           </>
+        ) : needsInjectedProviderSelection() ? (
+          <WalletProviderPicker />
         ) : (
           <button
             className={PRIMARY}

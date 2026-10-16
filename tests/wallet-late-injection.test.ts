@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getInjectedProvider, type Eip1193Provider } from "@/lib/wallet/client";
+import { getInjectedProvider, needsInjectedProviderSelection, resetInjectedProviderSelection, selectInjectedProvider, type Eip1193Provider } from "@/lib/wallet/client";
 
 /**
  * Regression tests for the wallet provider late-injection race (Phase 23.38).
@@ -49,6 +49,7 @@ describe("wallet provider detection — late injection", () => {
     // Capture the original global and set up a mock window without ethereum
     originalWindow = (globalThis as Record<string, unknown>).window as typeof globalThis | undefined;
     (globalThis as Record<string, unknown>).window = {};
+    resetInjectedProviderSelection();
   });
 
   afterEach(() => {
@@ -58,6 +59,7 @@ describe("wallet provider detection — late injection", () => {
     } else {
       delete (globalThis as Record<string, unknown>).window;
     }
+    resetInjectedProviderSelection();
     vi.restoreAllMocks();
   });
 
@@ -89,14 +91,24 @@ describe("wallet provider detection — late injection", () => {
     expect(detected).toBe(provider);
   });
 
-  it("selects the first provider from a multi-provider array", () => {
+  it("does not silently select providers[0] from a multi-provider array", () => {
     const providerA = createMockProvider();
     const providerB = createMockProvider();
     (globalThis as Record<string, unknown>).window = {
       ethereum: { ...providerA, providers: [providerA, providerB] },
     };
-    const detected = getInjectedProvider();
-    expect(detected).toBe(providerA);
+
+    // No explicit choice → never inferred (Phase 23.67).
+    expect(getInjectedProvider()).toBeNull();
+    expect(needsInjectedProviderSelection()).toBe(true);
+
+    // An explicit choice is honored.
+    selectInjectedProvider(1);
+    expect(getInjectedProvider()).toBe(providerB);
+    expect(needsInjectedProviderSelection()).toBe(false);
+
+    resetInjectedProviderSelection();
+    expect(getInjectedProvider()).toBeNull();
   });
 
   it("returns null after retries exhaust when no provider ever appears", async () => {

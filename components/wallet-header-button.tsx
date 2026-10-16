@@ -5,6 +5,8 @@ import { ChevronDown, Loader2 } from "lucide-react";
 
 import { useAuth, useInjectedSignMessage } from "@/components/auth-provider";
 import { useWallet } from "@/components/wallet-provider";
+import { WalletProviderPicker } from "@/components/wallet-provider-picker";
+import { needsInjectedProviderSelection } from "@/lib/wallet/client";
 import { shortenAddress } from "@/lib/wallet/state";
 
 const PRIMARY =
@@ -94,26 +96,30 @@ export function WalletHeaderButton() {
             </button>
           </div>
         )}
-        <button
-          className={PRIMARY}
-          disabled={isConnecting || connection === "wallet-not-detected"}
-          onClick={() => {
-            clearError();
-            void connect();
-          }}
-          type="button"
-          title={
-            connection === "wallet-not-detected"
-              ? "No injected EVM wallet was found in this browser."
-              : "Connect an injected EVM wallet (read-only)"
-          }
-        >
-          {connection === "wallet-not-detected"
-            ? "Wallet not detected"
-            : isConnecting
-            ? "Connecting…"
-            : "Connect Wallet"}
-        </button>
+        {needsInjectedProviderSelection() ? (
+          <WalletProviderPicker />
+        ) : (
+          <button
+            className={PRIMARY}
+            disabled={isConnecting || connection === "wallet-not-detected"}
+            onClick={() => {
+              clearError();
+              void connect();
+            }}
+            type="button"
+            title={
+              connection === "wallet-not-detected"
+                ? "No injected EVM wallet was found in this browser."
+                : "Connect an injected EVM wallet (read-only)"
+            }
+          >
+            {connection === "wallet-not-detected"
+              ? "Wallet not detected"
+              : isConnecting
+              ? "Connecting…"
+              : "Connect Wallet"}
+          </button>
+        )}
       </>
     );
   }
