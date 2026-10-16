@@ -69,8 +69,6 @@ function rowToAgent(row: AgentRow): AgentIdentity {
 }
 
 export function createPostgresAgentRepository(connectionString: string): AgentRepository {
-  const looksPooled = connectionString.includes("-pooler.") || connectionString.includes("pgbouncer") || connectionString.includes("pooler");
-  console.log("[DATABASE_SELECTION] { source: \"agent-registry\", present: true, looksPooled: " + looksPooled + " }");
   const pool = new Pool({ connectionString, max: 5, statement_cache_size: 0 } as PoolConfigExtended);
   let schemaReady: Promise<void> | null = null;
 

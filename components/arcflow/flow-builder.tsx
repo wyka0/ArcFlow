@@ -36,10 +36,9 @@ interface DeploymentState {
 
 interface FlowBuilderProps {
   initialFlow?: Partial<Flow>;
-  onActivate?: (flow: Flow) => void;
 }
 
-export function FlowBuilder({ initialFlow, onActivate }: FlowBuilderProps) {
+export function FlowBuilder({ initialFlow }: FlowBuilderProps) {
   const [currentStep, setCurrentStep] = useState<Step>("trigger");
   const [flow, setFlow] = useState<Partial<Flow>>({
     ...DEFAULT_FLOW,

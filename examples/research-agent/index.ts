@@ -53,7 +53,7 @@ async function main() {
   console.log(`   Agent:     research-agent`);
   console.log(`   Service:   market-data`);
   console.log(`   Base URL:  ${config.baseUrl}`);
-  console.log(`   API Key:   ${config.apiKey.slice(0, 8)}...`);
+  console.log("   API Key:   configured");
   if (isDemoMode) {
     console.log(`   Mode:      🧪 DEMO MODE (simulated payment, NO real transaction)`);
   } else {

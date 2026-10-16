@@ -60,8 +60,6 @@ export function createPostgresAuthSessionRepository(connectionString: string): A
   // Lazy-load pg so the in-memory path never pulls it in.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { Pool } = require("pg") as typeof import("pg");
-  const looksPooled = connectionString.includes("-pooler.") || connectionString.includes("pgbouncer") || connectionString.includes("pooler");
-  console.log("[DATABASE_SELECTION] { source: \"auth-session\", present: true, looksPooled: " + looksPooled + " }");
   const pool = new Pool({ connectionString, max: 5, statement_cache_size: 0 } as PoolConfigExtended);
   let schemaReady: Promise<void> | null = null;
 

@@ -32,9 +32,9 @@ const statCards = [
     chip: "bg-accent/10 text-accent",
   },
   {
-    label: "Active Flows",
+    label: "Your Active Flows",
     value: "0",
-    description: "No flows deployed yet",
+    description: "Connect wallet to view your flows",
     icon: Workflow,
     chip: "bg-success/10 text-success",
   },
