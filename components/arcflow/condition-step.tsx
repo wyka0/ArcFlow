@@ -57,7 +57,7 @@ export function ConditionStep({ condition, onChange, onBlur, active, completed, 
         <StepHeader
           number={2}
           label="CONDITION"
-          description="Set the minimum amount this workflow is configured for."
+          description="Set the exact USDC amount this workflow will split in one manual run."
           active={active}
           completed={completed}
         />
@@ -118,7 +118,7 @@ export function ConditionStep({ condition, onChange, onBlur, active, completed, 
             )}
             {!hasError && active && (
               <p className="mt-1.5 text-xs text-muted-foreground font-mono">
-                Minimum amount recorded as this workflow&apos;s threshold. Supports up to 2 decimal places.
+                This exact amount is split in one manual run — the deployment approves and executes precisely this value, with no automatic monitoring. Supports up to 2 decimal places.
               </p>
             )}
           </div>

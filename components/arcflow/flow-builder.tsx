@@ -14,7 +14,7 @@ import { ConditionStep } from "./condition-step";
 import { ActionStep } from "./action-step";
 import { FlowPreviewCard } from "./flow-preview";
 import { StepHeader } from "./step-indicator";
-import { deployFlow } from "@/lib/arcflow/deploy-flow";
+import { deployFlow, canBeginDeployment, applyDeploymentProgress, DEPLOYMENT_DISCLOSURE_STEPS, EXECUTION_AMOUNT_DISCLOSURE, type DeployStepKey, type UnresolvedDeployment } from "@/lib/arcflow/deploy-flow";
 import { UnknownTransactionOutcomeError } from "@/lib/arcflow/send-transaction";
 import { getActiveArcNetwork } from "@/lib/arc/network";
 
@@ -32,6 +32,8 @@ interface DeploymentState {
   outcomeUnknown?: boolean;
   /** The submitted hash whose outcome is unknown, for explorer lookup. */
   uncertainTxHash?: string;
+  /** The phase whose transaction failed (confirmed revert or unknown outcome). */
+  failedPhase?: DeployStepKey;
 }
 
 interface FlowBuilderProps {
@@ -48,6 +50,17 @@ export function FlowBuilder({ initialFlow }: FlowBuilderProps) {
   const [showReview, setShowReview] = useState(false);
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [deployment, setDeployment] = useState<DeploymentState>({ phase: "idle" });
+  // Phase 48.1 — synchronous single-flight guard. A ref (not state) so the
+  // check-and-set happens before any await and never depends on React's next
+  // render to disable the button.
+  const deployInFlightRef = useRef(false);
+  // Tracks the failing phase synchronously (state may not have flushed when a
+  // send rejects), so partial completion can be attributed to the right step.
+  const journeyPhaseRef = useRef<DeployStepKey | null>(null);
+  // A submitted transaction whose outcome is unknown. While set, a blind
+  // restart of the deployment journey is blocked until the user explicitly
+  // acknowledges the risk (or reconciles the outcome on the explorer).
+  const [unresolvedUnknown, setUnresolvedUnknown] = useState<UnresolvedDeployment | null>(null);
 
   const { session, connection } = useWallet();
   const { sendTransaction, isSending } = useTransactionSender();
@@ -141,15 +154,40 @@ export function FlowBuilder({ initialFlow }: FlowBuilderProps) {
   }, [currentStepIndex]);
 
   const handleBackToEdit = useCallback(() => {
+    deployInFlightRef.current = false;
+    setShowReview(false);
+    setCurrentStep("action");
+    setDeployment({ phase: "idle" });
+  }, []);
+
+  /**
+   * Phase 48.1 — explicit acknowledgment that a previous submission's outcome
+   * is unknown. Clears the reconciliation block and returns to the builder so
+   * a new deployment journey is only ever started deliberately.
+   */
+  const handleAcknowledgeUnknownOutcome = useCallback(() => {
+    setUnresolvedUnknown(null);
+    deployInFlightRef.current = false;
     setShowReview(false);
     setCurrentStep("action");
     setDeployment({ phase: "idle" });
   }, []);
 
   const handleDeploy = useCallback(async () => {
+    // Phase 48.1 — synchronous gate evaluated before any await: a double-click
+    // cannot start a second journey, and an unresolved unknown outcome (from a
+    // previous timed-out / RPC-lost submission) blocks a blind restart until
+    // the user explicitly acknowledges the risk.
+    const gate = canBeginDeployment({
+      inFlight: deployInFlightRef.current,
+      unresolvedUnknown,
+    });
+    if (!gate.ok) return;
     if (!canDeploy) return;
     if (!isArcFlowConfigured(network)) return;
 
+    deployInFlightRef.current = true;
+    journeyPhaseRef.current = "create";
     setDeployment({ phase: "create" });
 
     try {
@@ -158,20 +196,34 @@ export function FlowBuilder({ initialFlow }: FlowBuilderProps) {
         network,
         sendTransaction,
         onProgress: (progress) => {
-          setDeployment((prev) => ({ ...prev, ...progress }));
+          // Track the phase synchronously so a rejection right after a patch
+          // still attributes partial completion to the correct step.
+          journeyPhaseRef.current = (progress.phase as DeployStepKey) ?? journeyPhaseRef.current;
+          setDeployment((prev) => applyDeploymentProgress(prev, progress));
         },
       });
     } catch (error) {
       const outcomeUnknown = error instanceof UnknownTransactionOutcomeError;
-      setDeployment(prev => ({
+      const failedPhase = journeyPhaseRef.current ?? undefined;
+      setDeployment((prev) => ({
         ...prev,
         phase: "error",
+        failedPhase,
         outcomeUnknown,
         uncertainTxHash: outcomeUnknown ? error.transactionHash : undefined,
         error: error instanceof Error ? error.message : "Deployment failed",
       }));
+      if (outcomeUnknown) {
+        // Retain the submitted hash and block a blind restart of this journey.
+        setUnresolvedUnknown({
+          transactionHash: error.transactionHash,
+          phase: failedPhase ?? "execute",
+        });
+      }
+    } finally {
+      deployInFlightRef.current = false;
     }
-  }, [canDeploy, sendTransaction, network, flow]);
+  }, [canDeploy, sendTransaction, network, flow, unresolvedUnknown]);
 
   const isStepCompleted = (step: Step) => {
     const index = stepOrder.indexOf(step);
@@ -259,6 +311,7 @@ export function FlowBuilder({ initialFlow }: FlowBuilderProps) {
               deployment={deployment} 
               network={network}
               onBack={handleBackToEdit}
+              onAcknowledgeUnknown={handleAcknowledgeUnknownOutcome}
             />
           ) : showReview ? (
             <ReviewScreen 
@@ -468,14 +521,16 @@ function ReviewScreen({
               <span className="font-semibold">Deploying sends four separate transactions</span>
             </div>
             <ol className="ml-6 mt-1 list-decimal space-y-0.5">
-              <li>Create the flow</li>
-              <li>Activate the flow</li>
-              <li>Approve the exact USDC amount</li>
-              <li>Execute the split</li>
+              {DEPLOYMENT_DISCLOSURE_STEPS.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
             </ol>
             <p className="mt-2">
               Each transaction may require a separate wallet confirmation and may incur gas costs.
               The sequence is not atomic: an earlier transaction can succeed even if a later one fails.
+            </p>
+            <p className="mt-2 font-medium text-foreground">
+              {EXECUTION_AMOUNT_DISCLOSURE}
             </p>
           </div>
 
@@ -546,14 +601,16 @@ function ReviewScreen({
 function DeploymentScreen({ 
   deployment, 
   network,
-  onBack
+  onBack,
+  onAcknowledgeUnknown
 }: { 
   deployment: DeploymentState; 
   network: ReturnType<typeof getActiveArcNetwork>;
   onBack: () => void;
-}) {
+  onAcknowledgeUnknown: () => void;
+}) { 
   const phases = [
-    { key: "create", label: "CREATE FLOW", description: "Deploying flow contract..." },
+    { key: "create", label: "CREATE FLOW", description: "Recording the flow on-chain..." },
     { key: "activate", label: "ACTIVATE FLOW", description: "Activating flow for execution..." },
     { key: "approve", label: "APPROVE USDC", description: "Approving USDC spend..." },
     { key: "execute", label: "EXECUTE SPLIT", description: "Executing payment split..." },
@@ -561,7 +618,17 @@ function DeploymentScreen({
 
   const contractAddress = resolveArcFlowContractAddress(network);
 
-  const currentPhaseIndex = phases.findIndex(p => p.key === deployment.phase);
+  // Phase 48.1 — partial completion is derived from the retained evidence:
+  // a step is complete iff its confirmed tx hash exists, and the failing step
+  // is marked explicitly (confirmed revert vs unknown outcome).
+  const stepHash: Record<string, string | undefined> = {
+    create: deployment.createTxHash,
+    activate: deployment.activateTxHash,
+    approve: deployment.approveTxHash,
+    execute: deployment.executeTxHash,
+  };
+  const completedPhaseLabels = phases.filter((p) => !!stepHash[p.key]).map((p) => p.label);
+  const failedPhaseLabel = phases.find((p) => p.key === deployment.failedPhase)?.label;
   const isComplete = deployment.phase === "complete";
   const isError = deployment.phase === "error";
 
@@ -576,70 +643,62 @@ function DeploymentScreen({
         <CardBody className="pt-6">
           {/* Progress Steps */}
           <div className="mb-6">
-            {phases.map((phase, index) => (
-              <div key={phase.key} className="flex items-center gap-3 mb-3">
-                <div className={`flex items-center justify-center w-8 h-8 rounded-full text-sm font-semibold border transition-all ${
-                  index < currentPhaseIndex ? "bg-success border-success text-success-foreground" :
-                  index === currentPhaseIndex && !isComplete && !isError ? "bg-accent border-accent text-accent-foreground animate-pulse" :
-                  isError && index === currentPhaseIndex ? "bg-destructive border-destructive text-destructive-foreground" :
-                  "bg-muted border-border text-muted-foreground"
-                }`}>
-                  {index < currentPhaseIndex || (isComplete && index <= currentPhaseIndex) ? (
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="20 6 9 17 4 12" />
-                    </svg>
-                  ) : (
-                    index + 1
+            {phases.map((phase, index) => {
+              const hash = stepHash[phase.key];
+              const isCompleted = !!hash;
+              const isFailedStep = deployment.failedPhase === phase.key;
+              const isUnknownStep = isFailedStep && !!deployment.outcomeUnknown;
+              const isFailedConfirmed = isFailedStep && !deployment.outcomeUnknown;
+              const isCurrent = deployment.phase === phase.key && !isCompleted;
+              return (
+                <div key={phase.key} className="flex items-center gap-3 mb-3">
+                  <div className={`flex items-center justify-center w-8 h-8 rounded-full text-sm font-semibold border transition-all ${
+                    isCompleted ? "bg-success border-success text-success-foreground" :
+                    isUnknownStep ? "bg-warning border-warning text-warning-foreground" :
+                    isFailedConfirmed ? "bg-destructive border-destructive text-destructive-foreground" :
+                    isCurrent ? "bg-accent border-accent text-accent-foreground animate-pulse" :
+                    "bg-muted border-border text-muted-foreground"
+                  }`}>
+                    {isCompleted ? (
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    ) : isUnknownStep ? (
+                      <span className="text-xs font-bold">?</span>
+                    ) : isFailedConfirmed ? (
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                      </svg>
+                    ) : (
+                      index + 1
+                    )}
+                  </div>
+                  <div>
+                    <div className={`text-sm font-semibold ${isCompleted || isCurrent || isFailedStep ? "text-foreground" : "text-muted-foreground"}`}>
+                      {phase.label}
+                    </div>
+                    <div className="text-xs text-muted-foreground">{phase.description}</div>
+                  </div>
+                  {isUnknownStep && (
+                    <span className="text-xs font-semibold text-warning">Outcome unknown</span>
+                  )}
+                  {isFailedConfirmed && (
+                    <span className="text-xs font-semibold text-destructive">Failed</span>
+                  )}
+                  {hash && (
+                    <a 
+                      href={`${network.explorerUrl}/tx/${hash}`}
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="text-xs font-mono text-accent hover:underline"
+                    >
+                      View tx
+                    </a>
                   )}
                 </div>
-                <div>
-                  <div className={`text-sm font-semibold ${index <= currentPhaseIndex ? "text-foreground" : "text-muted-foreground"}`}>
-                    {phase.label}
-                  </div>
-                  <div className="text-xs text-muted-foreground">{phase.description}</div>
-                </div>
-                {deployment.createTxHash && phase.key === "create" && (
-                  <a 
-                    href={`${network.explorerUrl}/tx/${deployment.createTxHash}`}
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="text-xs font-mono text-accent hover:underline"
-                  >
-                    View tx
-                  </a>
-                )}
-                {deployment.activateTxHash && phase.key === "activate" && (
-                  <a
-                    href={`${network.explorerUrl}/tx/${deployment.activateTxHash}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs font-mono text-accent hover:underline"
-                  >
-                    View tx
-                  </a>
-                )}
-                {deployment.approveTxHash && phase.key === "approve" && (
-                  <a 
-                    href={`${network.explorerUrl}/tx/${deployment.approveTxHash}`}
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="text-xs font-mono text-accent hover:underline"
-                  >
-                    View tx
-                  </a>
-                )}
-                {deployment.executeTxHash && phase.key === "execute" && (
-                  <a 
-                    href={`${network.explorerUrl}/tx/${deployment.executeTxHash}`}
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="text-xs font-mono text-accent hover:underline"
-                  >
-                    View tx
-                  </a>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {isError && deployment.outcomeUnknown && (
@@ -653,9 +712,10 @@ function DeploymentScreen({
                 <span className="font-semibold">Confirmation unknown</span>
               </div>
               <p className="ml-6">
-                The transaction was submitted but its result could not be confirmed. It may still
+                The transaction submitted during {failedPhaseLabel ?? "this step"} was sent but its result could not be confirmed. It may still
                 confirm on Arc — this is not a confirmed failure. Check the explorer below before
-                retrying, and do not resubmit blindly.
+                retrying, and do not resubmit blindly. Starting a new deployment is blocked until you
+                acknowledge this risk.
               </p>
               {deployment.uncertainTxHash && (
                 <p className="ml-6 mt-2">
@@ -684,6 +744,16 @@ function DeploymentScreen({
                 <span className="font-semibold">Deployment failed</span>
               </div>
               <p className="ml-6">{deployment.error}</p>
+              {completedPhaseLabels.length > 0 && (
+                <div className="ml-6 mt-3 rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
+                  <span className="font-semibold text-foreground">Partial completion:</span>{" "}
+                  {deployment.flowId !== undefined && (
+                    <>flow #{deployment.flowId.toString()} was created; </>
+                  )}
+                  {completedPhaseLabels.join(", ")} confirmed before the failure. Retrying starts a
+                  new flow rather than resuming this one — check the tx links above first.
+                </div>
+              )}
             </div>
           )}
 
@@ -731,7 +801,14 @@ function DeploymentScreen({
           )}
 
           <div className="mt-6 flex flex-col sm:flex-row gap-3 justify-center">
-            {deployment.phase === "complete" || deployment.phase === "error" ? (
+            {isError && deployment.outcomeUnknown ? (
+              // Phase 48.1 — while an unknown outcome is unresolved, the only
+              // exit is an explicit acknowledgment; "Back to edit" is withheld
+              // so a blind restart of the same journey is impossible.
+              <Button variant="outline" onClick={onAcknowledgeUnknown}>
+                I understand — return to the builder
+              </Button>
+            ) : isComplete || isError ? (
               <Button variant="outline" onClick={onBack}>
                 Back to edit
               </Button>

@@ -153,3 +153,75 @@ export async function deployFlow(options: DeployFlowOptions): Promise<DeployFlow
 
   return result;
 }
+
+// ============================================================
+// Phase 48.1 — deployment safety helpers
+// ============================================================
+
+/** The four wizard phases that map to on-chain transactions, in order. */
+export type DeployStepKey = Exclude<DeployPhase, "complete">;
+
+/** A submitted transaction whose on-chain outcome could not be confirmed. */
+export interface UnresolvedDeployment {
+  transactionHash: `0x${string}`;
+  /** The phase during which the outcome became unknown. */
+  phase: DeployStepKey;
+}
+
+/**
+ * The four-transaction disclosure rendered on the review screen, in execution
+ * order. Kept as a constant so the copy is unit-testable and cannot drift
+ * between the review UI and the orchestrator's documented sequence.
+ */
+export const DEPLOYMENT_DISCLOSURE_STEPS = [
+  "Create the flow",
+  "Activate the flow",
+  "Approve the exact USDC amount",
+  "Execute the split",
+] as const;
+
+/**
+ * Copy stating that execution spends exactly the threshold amount entered, and
+ * that nothing runs automatically (Phase 48 audit finding: the threshold is the
+ * execution amount, not just a minimum).
+ */
+export const EXECUTION_AMOUNT_DISCLOSURE =
+  "The split executes for exactly the threshold amount entered above. ArcFlow does not monitor payments and never executes automatically — every run is started manually.";
+
+/**
+ * Synchronous single-flight + reconciliation gate for starting a deployment.
+ *
+ * Pure so the guard rules are unit-testable and cannot drift from the UI
+ * wiring. It must be evaluated **before any await** so a double-click cannot
+ * start a second journey, and re-checked on every attempt so an unresolved
+ * unknown outcome (timeout / RPC failure) blocks a blind restart of the same
+ * deployment journey until the outcome is reconciled on the explorer or the
+ * user explicitly acknowledges the risk.
+ */
+export function canBeginDeployment(state: {
+  inFlight: boolean;
+  unresolvedUnknown: UnresolvedDeployment | null;
+}): { ok: true } | { ok: false; reason: "in-flight" | "unresolved-unknown" } {
+  if (state.inFlight) {
+    return { ok: false, reason: "in-flight" };
+  }
+  if (state.unresolvedUnknown) {
+    return { ok: false, reason: "unresolved-unknown" };
+  }
+  return { ok: true };
+}
+
+/**
+ * Merge an observational progress patch into the accumulated deployment state.
+ *
+ * Pure and additive: a patch never removes previously observed evidence (tx
+ * hashes, flow id), so when a later step fails the UI can still show every
+ * step that completed. The deployment screen uses this for its state updates
+ * so the partial-completion semantics cannot drift from the unit tests.
+ */
+export function applyDeploymentProgress<S extends { phase: string }>(
+  prev: S,
+  patch: Partial<S> & { phase: S["phase"] },
+): S {
+  return { ...prev, ...patch };
+}
