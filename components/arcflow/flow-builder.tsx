@@ -78,6 +78,10 @@ export function FlowBuilder({ initialFlow }: FlowBuilderProps) {
     updateFlow("actions", actions);
   }, [updateFlow]);
 
+  const handleNameChange = useCallback((name: string) => {
+    updateFlow("name", name);
+  }, [updateFlow]);
+
   const validateCurrentStep = useCallback(() => {
     const stepErrors = validateStep(flow, currentStep);
     setErrors(validateFlow(flow)); // store all errors for later display
@@ -98,6 +102,7 @@ export function FlowBuilder({ initialFlow }: FlowBuilderProps) {
     const validationErrors = validateFlow(flow);
     setErrors(validationErrors);
     setTouched({
+      name: true,
       trigger: true,
       condition: true,
       action: true,
@@ -105,15 +110,27 @@ export function FlowBuilder({ initialFlow }: FlowBuilderProps) {
     return validationErrors.length === 0;
   }, [flow]);
 
+  /**
+   * Single review gate shared by the desktop footer "Review" button and the
+   * mobile "Review & Deploy" button. Both run the full-flow validation
+   * (`validateAll`) so neither action can bypass a required field — notably
+   * the flow name, which per-step validation intentionally does not check
+   * (see STEP_FIELD_PREFIXES in types/flow.ts).
+   */
+  const handleReview = useCallback(() => {
+    if (validateAll()) {
+      setShowReview(true);
+    }
+  }, [validateAll]);
+
   const handleNext = useCallback(() => {
     // Mark the current step as touched so validation errors become visible.
     setTouched((prev) => ({ ...prev, [currentStep]: true }));
-    if (validateCurrentStepRef.current()) {
-      if (currentStepIndex < stepOrder.length - 1) {
-        setCurrentStep(stepOrder[currentStepIndex + 1]);
-      } else {
-        setShowReview(true);
-      }
+    // "Next" only advances through the wizard steps. The final step's
+    // "Review" button uses handleReview (full-flow validation) instead, so
+    // the desktop and mobile review actions enforce identical gates.
+    if (currentStepIndex < stepOrder.length - 1 && validateCurrentStepRef.current()) {
+      setCurrentStep(stepOrder[currentStepIndex + 1]);
     }
   }, [currentStepIndex, currentStep]);
 
@@ -174,8 +191,42 @@ export function FlowBuilder({ initialFlow }: FlowBuilderProps) {
 
   const isStepActive = (step: Step) => step === currentStep;
 
+  // Inline error for the flow name. Shown once the field has been touched —
+  // either by blurring the input or by a failed review attempt (validateAll
+  // marks the name touched). The input itself is always visible so the error
+  // can be seen and corrected from any wizard step.
+  const nameErrors = touched.name ? errors.filter((e) => e.field === "name").map((e) => e.message) : [];
+  const nameError = nameErrors[0];
+
   return (
     <div className="w-full">
+      {/* Flow name — always visible so it can be set or corrected from any step.
+          It does not block step progression (documented in STEP_FIELD_PREFIXES,
+          types/flow.ts) but both review actions enforce it via validateAll. */}
+      <div className="mb-6">
+        <label htmlFor="flow-name" className="mb-1.5 block text-xs font-mono tracking-[0.1em] uppercase text-muted-foreground">
+          Flow name
+        </label>
+        <input
+          id="flow-name"
+          type="text"
+          value={flow.name ?? ""}
+          onChange={(e) => handleNameChange(e.target.value)}
+          onBlur={() => handleBlur("name")}
+          placeholder="e.g. Treasury revenue split"
+          className={`w-full rounded-md border bg-card px-3 py-2 text-sm text-foreground transition-colors ${
+            nameError ? "border-destructive focus:border-destructive" : "border-border focus:border-accent"
+          }`}
+          aria-invalid={!!nameError}
+          aria-describedby={nameError ? "flow-name-error" : undefined}
+        />
+        {nameError && (
+          <p id="flow-name-error" className="mt-1 text-xs text-destructive font-mono" role="alert">
+            {nameError}
+          </p>
+        )}
+      </div>
+
       {/* Step Indicator */}
       <div className="flex items-center gap-2 mb-6 lg:mb-8" role="navigation" aria-label="Flow builder steps">
         {stepOrder.map((step, index) => {
@@ -278,7 +329,7 @@ export function FlowBuilder({ initialFlow }: FlowBuilderProps) {
                   </svg>
                   Back
                 </Button>
-                <Button onClick={handleNext}>
+                <Button onClick={currentStepIndex === stepOrder.length - 1 ? handleReview : handleNext}>
                   {currentStepIndex === stepOrder.length - 1 ? "Review" : "Next"}
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
                     <line x1={5} y1={12} x2={19} y2={12} />
@@ -320,14 +371,7 @@ export function FlowBuilder({ initialFlow }: FlowBuilderProps) {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, delay: 0.3, ease: [0.22, 1, 0.36, 1] }}
       >
-        <Button
-          className="w-full"
-          onClick={() => {
-            if (validateAll()) {
-              setShowReview(true);
-            }
-          }}
-        >
+        <Button className="w-full" onClick={handleReview}>
           Review & Deploy
         </Button>
       </motion.div>
@@ -415,6 +459,25 @@ function ReviewScreen({
           </div>
           </div>
         </div>
+
+          <div className="rounded-lg border border-border bg-muted/40 p-4 text-xs text-muted-foreground">
+            <div className="mb-1 flex items-center gap-2">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z" />
+              </svg>
+              <span className="font-semibold">Deploying sends four separate transactions</span>
+            </div>
+            <ol className="ml-6 mt-1 list-decimal space-y-0.5">
+              <li>Create the flow</li>
+              <li>Activate the flow</li>
+              <li>Approve the exact USDC amount</li>
+              <li>Execute the split</li>
+            </ol>
+            <p className="mt-2">
+              Each transaction may require a separate wallet confirmation and may incur gas costs.
+              The sequence is not atomic: an earlier transaction can succeed even if a later one fails.
+            </p>
+          </div>
 
           {!contractConfigured && (
             <div className="rounded-lg border border-info bg-info/10 p-4 text-xs text-info">

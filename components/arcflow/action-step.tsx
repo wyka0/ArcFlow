@@ -56,7 +56,8 @@ export function ActionStep({ actions, onChange, onBlur, active, completed, error
   );
 
   const handleAddAction = useCallback(() => {
-    if (actions.length >= 5) return;
+    // The V1 contract supports exactly 2 recipients (treasury and contributor).
+    if (actions.length >= 2) return;
     const newActions = [
       ...actions,
       { type: "TRANSFER" as const, recipient: "0x" as Address, percentage: 0 },
@@ -107,7 +108,8 @@ export function ActionStep({ actions, onChange, onBlur, active, completed, error
               variant="ghost"
               size="sm"
               onClick={handleAddAction}
-              disabled={actions.length >= 5 || !active}
+              disabled={actions.length >= 2 || !active}
+              title="The V1 contract supports exactly 2 recipients (treasury and contributor)"
             >
               + Add recipient
             </Button>
@@ -222,6 +224,7 @@ export function ActionStep({ actions, onChange, onBlur, active, completed, error
             <div className="pt-2 border-t border-border">
               <p className="text-xs text-muted-foreground font-mono">
                 Each recipient must be a valid EVM address (0x...). Percentages must be positive integers summing to 100%.
+                The V1 contract supports exactly 2 recipients (treasury and contributor).
               </p>
             </div>
           )}

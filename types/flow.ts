@@ -56,14 +56,23 @@ export function validateFlow(flow: Partial<Flow>): FlowValidationError[] {
     errors.push({ field: "condition.operator", message: "Condition operator is required" });
   }
 
-  const amount = Number(flow.condition?.amount);
-  if (!flow.condition?.amount || isNaN(amount) || amount <= 0) {
-    errors.push({ field: "condition.amount", message: "Amount must be a positive number" });
+  const thresholdError = validateThresholdAmount(flow.condition?.amount);
+  if (thresholdError) {
+    errors.push({ field: "condition.amount", message: thresholdError });
   }
 
   if (!flow.actions?.length) {
     errors.push({ field: "actions", message: "At least one action is required" });
   } else {
+    // The deployed V1 contract's `createFlow` accepts exactly two recipients:
+    // treasury and contributor. Never silently drop extra recipients.
+    if (flow.actions.length !== 2) {
+      errors.push({
+        field: "actions",
+        message: "The V1 contract supports exactly 2 recipients (treasury and contributor)",
+      });
+    }
+
     let totalPercentage = 0;
     flow.actions.forEach((action, index) => {
       if (!action.recipient || !isValidAddress(action.recipient)) {
@@ -81,6 +90,31 @@ export function validateFlow(flow: Partial<Flow>): FlowValidationError[] {
   }
 
   return errors;
+}
+
+/**
+ * Validate a threshold amount string.
+ *
+ * The V1 flow threshold is converted to 6-decimal USDC base units using **cent
+ * precision** (2 decimal places), so values with more than two decimals are
+ * rejected rather than silently rounded (`0.001` would become `0` base units
+ * and revert `InvalidThreshold` on-chain). Zero, negative, and non-numeric
+ * values are also rejected.
+ */
+export function validateThresholdAmount(raw: string | undefined): string | null {
+  if (typeof raw !== "string" || raw.trim() === "") {
+    return "Threshold amount is required";
+  }
+  const trimmed = raw.trim();
+  const value = Number(trimmed);
+  if (!Number.isFinite(value) || value <= 0) {
+    return "Threshold amount must be a positive number";
+  }
+  const decimals = trimmed.includes(".") ? trimmed.split(".")[1]?.length ?? 0 : 0;
+  if (decimals > 2) {
+    return "Threshold amount supports up to 2 decimal places";
+  }
+  return null;
 }
 
 /**

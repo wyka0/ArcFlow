@@ -118,7 +118,7 @@ export function ConditionStep({ condition, onChange, onBlur, active, completed, 
             )}
             {!hasError && active && (
               <p className="mt-1.5 text-xs text-muted-foreground font-mono">
-                Minimum amount recorded as this workflow&apos;s threshold. Supports up to 6 decimal places.
+                Minimum amount recorded as this workflow&apos;s threshold. Supports up to 2 decimal places.
               </p>
             )}
           </div>

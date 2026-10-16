@@ -136,3 +136,135 @@ describe("validateFlow — full-flow validation (deployment gate)", () => {
     expect(validateFlow(flow).some(e => e.field === "name")).toBe(true);
   });
 });
+
+describe("flow name validation (Phase 44)", () => {
+  it("permits progress when the name is valid and all other fields are valid", () => {
+    const errors = validateFlow(VALID_FLOW);
+    expect(errors.some(e => e.field === "name")).toBe(false);
+    expect(errors).toHaveLength(0);
+  });
+
+  it("rejects an empty name", () => {
+    const errors = validateFlow({ ...VALID_FLOW, name: "" });
+    expect(errors.some(e => e.field === "name" && e.message.length > 0)).toBe(true);
+  });
+
+  it("rejects whitespace-only names", () => {
+    for (const name of ["   ", "\t", "\n", " \t\n "]) {
+      const errors = validateFlow({ ...VALID_FLOW, name });
+      expect(errors.some(e => e.field === "name")).toBe(true);
+    }
+  });
+
+  it("rejects a flow with no name property (fail-safe)", () => {
+    const flow = { ...VALID_FLOW } as Partial<Flow>;
+    delete (flow as { name?: string }).name;
+    const errors = validateFlow(flow);
+    expect(errors.some(e => e.field === "name")).toBe(true);
+  });
+
+  it("permits progress after correcting a name error, preserving all other settings", () => {
+    const broken = { ...VALID_FLOW, name: "   " };
+    expect(validateFlow(broken).some(e => e.field === "name")).toBe(true);
+    // The user fixes only the name; every other field is untouched.
+    const fixed = { ...broken, name: "Revenue Split" };
+    expect(validateFlow(fixed)).toHaveLength(0);
+  });
+
+  it("name is deployment-only: per-step progression ignores it, but the single review gate (validateFlow) enforces it", () => {
+    // STEP_FIELD_PREFIXES intentionally excludes "name" from step progression.
+    // Both review entry points (desktop footer "Review" and mobile
+    // "Review & Deploy") share `validateAll` -> `validateFlow` as their gate,
+    // so neither can bypass the required name.
+    const flow = { ...VALID_FLOW, name: "" };
+    expect(validateStep(flow, "action")).toHaveLength(0); // progression not blocked
+    expect(validateFlow(flow).some(e => e.field === "name")).toBe(true); // review gate blocks
+  });
+});
+
+describe("recipient count validation (Phase 42)", () => {
+  it("accepts exactly two recipients", () => {
+    const errors = validateFlow(VALID_FLOW);
+    expect(errors.some(e => e.message.includes("exactly 2"))).toBe(false);
+    expect(errors).toHaveLength(0);
+  });
+
+  it("rejects a single recipient", () => {
+    const flow: Partial<Flow> = {
+      ...VALID_FLOW,
+      actions: [{ type: "TRANSFER", recipient: VALID_RECIPIENT_A, percentage: 100 }],
+    };
+    const errors = validateFlow(flow);
+    expect(errors.some(e => e.message.includes("exactly 2 recipients"))).toBe(true);
+    // The lone recipient is valid and totals 100%, so the count rule is the
+    // only failure — nothing was silently discarded or re-balanced.
+    expect(errors.filter(e => e.field === "actions")).toHaveLength(1);
+  });
+
+  it("rejects three recipients", () => {
+    const flow: Partial<Flow> = {
+      ...VALID_FLOW,
+      actions: [
+        { type: "TRANSFER", recipient: VALID_RECIPIENT_A, percentage: 60 },
+        { type: "TRANSFER", recipient: VALID_RECIPIENT_B, percentage: 25 },
+        { type: "TRANSFER", recipient: "0x9999999999999999999999999999999999999999", percentage: 15 },
+      ],
+    };
+    const errors = validateFlow(flow);
+    expect(errors.some(e => e.message.includes("exactly 2 recipients"))).toBe(true);
+    // Addresses and percentage total (100%) are fine — only the count fails.
+    expect(errors.filter(e => e.field === "actions")).toHaveLength(1);
+  });
+
+  it("keeps address and percentage-total validation intact alongside the count rule", () => {
+    const flow: Partial<Flow> = {
+      ...VALID_FLOW,
+      actions: [
+        { type: "TRANSFER", recipient: "0x", percentage: 60 },
+        { type: "TRANSFER", recipient: VALID_RECIPIENT_B, percentage: 30 },
+      ],
+    };
+    const errors = validateFlow(flow);
+    expect(errors.some(e => e.field.startsWith("actions[") && e.message.includes("EVM address"))).toBe(true);
+    expect(errors.some(e => e.field === "actions" && e.message.includes("100%"))).toBe(true);
+    expect(errors.some(e => e.message.includes("exactly 2"))).toBe(false);
+  });
+});
+
+describe("threshold precision (Phase 42)", () => {
+  const withAmount = (amount: string): Partial<Flow> => ({
+    ...VALID_FLOW,
+    condition: { operator: "GTE", amount },
+  });
+
+  it("accepts whole-dollar, two-decimal, and minimum-cent values", () => {
+    for (const amount of ["1", "1.25", "0.01", "10.00"]) {
+      const errors = validateFlow(withAmount(amount));
+      expect(errors.some(e => e.field === "condition.amount")).toBe(false);
+    }
+  });
+
+  it("rejects sub-cent and extra-decimal values without rounding", () => {
+    for (const amount of ["0.001", "1.239"]) {
+      const errors = validateFlow(withAmount(amount));
+      // The precision message proves rejection was for the decimal rule —
+      // a silently rounded value (e.g. 1.239 -> 1.24) would be accepted
+      // and produce no error at all.
+      expect(errors.some(e => e.field === "condition.amount" && e.message.includes("2 decimal places"))).toBe(true);
+    }
+  });
+
+  it("rejects zero and negative thresholds", () => {
+    for (const amount of ["0", "0.00", "-1", "-0.01"]) {
+      const errors = validateFlow(withAmount(amount));
+      expect(errors.some(e => e.field === "condition.amount" && e.message.includes("positive number"))).toBe(true);
+    }
+  });
+
+  it("rejects empty, whitespace-only, and non-numeric thresholds", () => {
+    for (const amount of ["", "   ", "abc"]) {
+      const errors = validateFlow(withAmount(amount));
+      expect(errors.some(e => e.field === "condition.amount")).toBe(true);
+    }
+  });
+});
