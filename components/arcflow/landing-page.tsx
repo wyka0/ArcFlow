@@ -14,42 +14,40 @@ import {
 } from "lucide-react";
 
 const tickerItems = [
-  "Dual-Authorization",
-  "EIP-3009 TransferWithAuthorization",
-  "Policy Engine",
-  "Atomic Split Execution",
-  "PostgreSQL Persistence",
+  "Atomic USDC Split Execution",
+  "Non-Custodial",
+  "Arc Mainnet (5042)",
   "Origin Validation",
   "Rate Limiting",
-  "Zero-Custody Architecture",
+  "USDC on Arc",
 ];
 
 const features = [
   {
     icon: Shield,
-    title: "Dual-Authorization",
-    description: "ArcFlow EIP-712 + USDC EIP-3009 signatures verified on-chain",
+    title: "Dual-Authorization (V2)",
+    description: "Frozen at RC3 — not deployed. V2 adds ArcFlow EIP-712 and USDC EIP-3009 signature verification.",
     color: "text-accent",
     bg: "bg-accent/10",
   },
   {
     icon: Zap,
     title: "Atomic Execution",
-    description: "Pull and split USDC in a single non-reentrant transaction",
+    description: "Pulls and splits USDC in a single non-reentrant transaction (V1, live).",
     color: "text-success",
     bg: "bg-success/10",
   },
   {
     icon: Settings,
-    title: "Policy Engine",
-    description: "Configurable spending limits and recipient validation",
+    title: "Policy Enforcement (agent API)",
+    description: "Server-side spending limits and recipient checks for the agent payment API (demo configuration).",
     color: "text-info",
     bg: "bg-info/10",
   },
   {
     icon: Database,
-    title: "PostgreSQL Persistence",
-    description: "Neon-backed durable ledger with self-bootstrapping schema",
+    title: "PostgreSQL Ledger (agent API)",
+    description: "Neon PostgreSQL persistence for the agent payment API; ArcFlow flow definitions are stored on-chain.",
     color: "text-warning",
     bg: "bg-warning/10",
   },
@@ -63,7 +61,7 @@ const features = [
   {
     icon: Workflow,
     title: "No-Code Flow Builder",
-    description: "Define triggers, conditions, and actions visually",
+    description: "Design triggers, conditions, and actions visually. Public flow deployment is disabled; execution is a manual one-shot split with no trigger monitoring.",
     color: "text-accent",
     bg: "bg-accent/10",
   },
@@ -71,7 +69,7 @@ const features = [
 
 const exploreRoutes = [
   { title: "Flow Builder", description: "Create and manage payment workflows", href: "/app" },
-  { title: "Flow List", description: "View and manage active flows", href: "/app/flows" },
+  { title: "Flow List", description: "UI preview — on-chain listing is not yet implemented.", href: "/app/flows" },
   { title: "New Flow", description: "Create a new payment workflow", href: "/app/flows/new" },
 ];
 
@@ -120,7 +118,7 @@ export function LandingPage() {
               Ship your <span className="text-accent">USDC</span> payment workflows on Arc
             </h1>
             <p className="text-sm text-muted-foreground">
-              Non-custodial, dual-authorized payment workflows with policy enforcement and PostgreSQL persistence.
+              Design non-custodial USDC split flows on Arc and execute them atomically. Dual-authorization (V2) is frozen at RC3 and not deployed.
             </p>
 
             <div className="flex flex-wrap gap-1.5">
@@ -150,7 +148,7 @@ export function LandingPage() {
                 V1 Deployed on Arc Mainnet
               </div>
               <p className="text-[11px] leading-relaxed text-muted-foreground">
-                ArcFlowV1 is live on Arc mainnet with 1 active flow. ArcFlowV2 (dual-authorization) is frozen at RC3 pending deployment.
+                ArcFlowV1 is live on Arc mainnet with 1 active flow. ArcFlowV2 (dual-authorization) is frozen at RC3 and not deployed. Public flow deployment is disabled.
               </p>
             </div>
 
