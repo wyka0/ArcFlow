@@ -14,6 +14,7 @@ import { useWallet } from "@/components/wallet-provider";
 import { createArcReadClient } from "@/lib/arc/client";
 import { isArcFlowConfigured } from "@/lib/arcflow/contract";
 import { readFlow, readFlowsByOwner, type ContractFlow } from "@/lib/arcflow/interactions";
+import { initialFlowListState, type FlowListState } from "@/lib/arcflow/flow-state";
 import {
   formatBasisPointsPercent,
   formatFlowUsdc,
@@ -28,20 +29,13 @@ import {
  * wrong network, an RPC error, an empty result, and a loaded list are all
  * distinguished. An RPC error is NEVER rendered as "no flows".
  */
-type ListState =
-  | { kind: "config-missing" }
-  | { kind: "no-wallet" }
-  | { kind: "wrong-network" }
-  | { kind: "loading" }
-  | { kind: "error"; message: string }
-  | { kind: "empty" }
-  | { kind: "loaded"; flows: { id: bigint; flow: ContractFlow }[] };
-
 export function FlowList() {
   const { session, connection, network, providerRef } = useWallet();
   const configured = isArcFlowConfigured(network);
   const address = session.wallet.address;
-  const [state, setState] = useState<ListState>({ kind: "loading" });
+  // When the address is absent (build-time constant) render the not-configured
+  // notice immediately — no misleading loading flash, and SSR/client agree.
+  const [state, setState] = useState<FlowListState>(() => initialFlowListState(configured));
 
   const load = useCallback(async () => {
     if (!configured) {

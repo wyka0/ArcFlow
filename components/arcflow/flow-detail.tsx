@@ -13,6 +13,7 @@ import { useWallet } from "@/components/wallet-provider";
 import { createArcReadClient } from "@/lib/arc/client";
 import { isArcFlowConfigured, resolveArcFlowContractAddress } from "@/lib/arcflow/contract";
 import { readFlow, type ContractFlow } from "@/lib/arcflow/interactions";
+import { initialFlowDetailState, type FlowDetailState } from "@/lib/arcflow/flow-state";
 import {
   formatBasisPointsPercent,
   formatFlowUsdc,
@@ -24,20 +25,14 @@ import {
  * Phase 25 — read-only detail view for a single on-chain V1 flow (`getFlow`).
  * No transaction actions are offered.
  */
-type DetailState =
-  | { kind: "invalid-id" }
-  | { kind: "config-missing" }
-  | { kind: "loading" }
-  | { kind: "not-found"; message: string }
-  | { kind: "error"; message: string }
-  | { kind: "loaded"; flowId: bigint; flow: ContractFlow };
-
 export function FlowDetail({ flowId: rawId }: { flowId: string }) {
   const { network, providerRef } = useWallet();
   const configured = isArcFlowConfigured(network);
   const contractAddress = resolveArcFlowContractAddress(network);
   const parsed = useMemo(() => parseFlowId(rawId), [rawId]);
-  const [state, setState] = useState<DetailState>({ kind: "loading" });
+  // Invalid IDs and a missing address are known before any read; render their
+  // states immediately so SSR and the first client render agree.
+  const [state, setState] = useState<FlowDetailState>(() => initialFlowDetailState(configured, parsed));
 
   const load = useCallback(async () => {
     if (parsed === null) {
