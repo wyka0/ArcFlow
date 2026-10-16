@@ -1,4 +1,4 @@
-import { encodeFunctionData, decodeEventLog, type Address, type Hex, type TypedDataDomain } from "viem";
+import { encodeFunctionData, decodeEventLog, isAddress, type Address, type Hex, type PublicClient, type TypedDataDomain } from "viem";
 
 import { ARCFLOW_ABI, getArcFlowContractAddress, ARCFLOW_V2_ABI, getArcFlowV2ContractAddress } from "./contract";
 import { getActiveArcNetwork, type ArcNetwork } from "../arc/network";
@@ -175,21 +175,132 @@ export function encodeApproveUsdcForArcFlow(amount: string, network: ArcNetwork 
 }
 
 /**
- * Read a single flow from the contract.
+ * Reason a read-only ArcFlow query failed. Callers MUST NOT conflate a failure
+ * with an empty/zero success.
+ */
+export type ArcFlowReadFailureReason =
+  | "NOT_CONFIGURED" // contract address unset/malformed → fail closed
+  | "INVALID_INPUT" // bad flow id / owner address
+  | "NOT_FOUND" // contract reverted (e.g. `FlowNotFound`)
+  | "RPC_ERROR"; // network/transport failure
+
+export interface ArcFlowReadFailure {
+  ok: false;
+  reason: ArcFlowReadFailureReason;
+  message: string;
+}
+
+export type ReadFlowResult = { ok: true; flow: ContractFlow } | ArcFlowReadFailure;
+export type ReadFlowListResult = { ok: true; flowIds: bigint[] } | ArcFlowReadFailure;
+export type ReadFlowCountResult = { ok: true; count: bigint } | ArcFlowReadFailure;
+
+/** Fail closed when the contract address is unset or malformed. */
+function resolveReadTarget(network: ArcNetwork): { ok: true; address: Address } | ArcFlowReadFailure {
+  const address = getArcFlowContractAddress(network);
+  if (address === "0x" || !isAddress(address, { strict: false })) {
+    return {
+      ok: false,
+      reason: "NOT_CONFIGURED",
+      message: "The ArcFlow contract address is not configured, so on-chain flows cannot be read.",
+    };
+  }
+  return { ok: true, address: address as Address };
+}
+
+/** Walks the error (and its `cause` chain) for a viem contract-revert error. */
+function isRevertError(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current; depth++) {
+    const name =
+      typeof current === "object" && current !== null && "name" in current
+        ? (current as { name?: unknown }).name
+        : undefined;
+    if (typeof name === "string" && name.includes("Revert")) return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
+ * Map a decoded `getFlow` result to `ContractFlow`. Handles both the named
+ * object form (named ABI outputs) and a positional tuple.
+ */
+export function mapContractFlow(raw: unknown): ContractFlow {
+  if (Array.isArray(raw)) {
+    const [owner, treasury, contributor, treasuryBps, contributorBps, threshold, active] = raw as [
+      Address,
+      Address,
+      Address,
+      number | bigint,
+      number | bigint,
+      bigint,
+      boolean,
+    ];
+    return {
+      owner,
+      treasury,
+      contributor,
+      treasuryBps: Number(treasuryBps),
+      contributorBps: Number(contributorBps),
+      threshold: BigInt(threshold),
+      active: Boolean(active),
+    };
+  }
+  const record = raw as {
+    owner: Address;
+    treasury: Address;
+    contributor: Address;
+    treasuryBps: number | bigint;
+    contributorBps: number | bigint;
+    threshold: bigint;
+    active: boolean;
+  };
+  return {
+    owner: record.owner,
+    treasury: record.treasury,
+    contributor: record.contributor,
+    treasuryBps: Number(record.treasuryBps),
+    contributorBps: Number(record.contributorBps),
+    threshold: BigInt(record.threshold),
+    active: Boolean(record.active),
+  };
+}
+
+/**
+ * Read a single flow from the contract (`getFlow`). Read-only.
  *
- * NOT IMPLEMENTED — stub. Always returns `null`; no on-chain read is performed.
- * Do not treat this as a working flow query.
+ * Never fabricates a flow: a missing configuration is `NOT_CONFIGURED`, a
+ * reverted read is `NOT_FOUND`, and an RPC failure is `RPC_ERROR`.
  */
 export async function readFlow(
   flowId: bigint,
+  client: PublicClient,
   network: ArcNetwork = getActiveArcNetwork()
-): Promise<ContractFlow | null> {
-  const contractAddress = getArcFlowContractAddress(network);
-  if (contractAddress === "0x") {
-    throw new Error("ArcFlow contract not configured");
+): Promise<ReadFlowResult> {
+  if (flowId < 0n) {
+    return { ok: false, reason: "INVALID_INPUT", message: "Flow ID must be a non-negative integer." };
   }
+  const target = resolveReadTarget(network);
+  if (!target.ok) return target;
 
-  return null;
+  try {
+    const raw = await client.readContract({
+      address: target.address,
+      abi: ARCFLOW_ABI,
+      functionName: "getFlow",
+      args: [flowId],
+    });
+    return { ok: true, flow: mapContractFlow(raw) };
+  } catch (error) {
+    if (isRevertError(error)) {
+      return {
+        ok: false,
+        reason: "NOT_FOUND",
+        message: `Flow #${flowId.toString()} was not found on-chain.`,
+      };
+    }
+    return { ok: false, reason: "RPC_ERROR", message: "The Arc RPC read failed. Flow unavailable." };
+  }
 }
 
 /**
@@ -228,37 +339,57 @@ export function extractCreatedFlowId(
 }
 
 /**
- * Read flows by owner from the contract.
+ * Read the flow IDs owned by `owner` (`getFlowsByOwner`). Read-only.
  *
- * NOT IMPLEMENTED — stub. Always returns `[]`; no on-chain read is performed.
- * The UI does not list flows from chain state.
+ * Returns `ok: true` with a possibly-empty list; failures are reported, never
+ * coerced into an empty success.
  */
 export async function readFlowsByOwner(
   owner: Address,
+  client: PublicClient,
   network: ArcNetwork = getActiveArcNetwork()
-): Promise<bigint[]> {
-  const contractAddress = getArcFlowContractAddress(network);
-  if (contractAddress === "0x") {
-    throw new Error("ArcFlow contract not configured");
+): Promise<ReadFlowListResult> {
+  if (!isAddress(owner, { strict: false })) {
+    return { ok: false, reason: "INVALID_INPUT", message: "A valid owner address is required." };
   }
+  const target = resolveReadTarget(network);
+  if (!target.ok) return target;
 
-  return [];
+  try {
+    const ids = await client.readContract({
+      address: target.address,
+      abi: ARCFLOW_ABI,
+      functionName: "getFlowsByOwner",
+      args: [owner],
+    });
+    return { ok: true, flowIds: (ids as readonly bigint[]).map((id) => BigInt(id)) };
+  } catch {
+    return { ok: false, reason: "RPC_ERROR", message: "The Arc RPC read failed. Flow list unavailable." };
+  }
 }
 
 /**
- * Read flow count from the contract.
+ * Read the total flow count (`getFlowCount`). Read-only.
  *
- * NOT IMPLEMENTED — stub. Always returns `0n`; no on-chain read is performed.
+ * An RPC failure is `RPC_ERROR`, never a fabricated `0n`.
  */
 export async function readFlowCount(
+  client: PublicClient,
   network: ArcNetwork = getActiveArcNetwork()
-): Promise<bigint> {
-  const contractAddress = getArcFlowContractAddress(network);
-  if (contractAddress === "0x") {
-    throw new Error("ArcFlow contract not configured");
-  }
+): Promise<ReadFlowCountResult> {
+  const target = resolveReadTarget(network);
+  if (!target.ok) return target;
 
-  return 0n;
+  try {
+    const count = await client.readContract({
+      address: target.address,
+      abi: ARCFLOW_ABI,
+      functionName: "getFlowCount",
+    });
+    return { ok: true, count: BigInt(count as bigint) };
+  } catch {
+    return { ok: false, reason: "RPC_ERROR", message: "The Arc RPC read failed. Flow count unavailable." };
+  }
 }
 
 /** Format a contract flow for display. */
