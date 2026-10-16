@@ -57,7 +57,7 @@ export function ConditionStep({ condition, onChange, onBlur, active, completed, 
         <StepHeader
           number={2}
           label="CONDITION"
-          description="Set the minimum payment amount to trigger this flow."
+          description="Set the minimum amount this workflow is configured for."
           active={active}
           completed={completed}
         />
@@ -118,7 +118,7 @@ export function ConditionStep({ condition, onChange, onBlur, active, completed, 
             )}
             {!hasError && active && (
               <p className="mt-1.5 text-xs text-muted-foreground font-mono">
-                Minimum payment amount to trigger the flow. Supports up to 6 decimal places.
+                Minimum amount recorded as this workflow&apos;s threshold. Supports up to 6 decimal places.
               </p>
             )}
           </div>

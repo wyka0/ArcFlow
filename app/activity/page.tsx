@@ -270,7 +270,7 @@ export default function ActivityPage() {
 
       <footer className="mt-8 flex flex-col items-center justify-between gap-2 text-xs text-muted-foreground md:flex-row">
         <span className="font-medium text-foreground">ArcFlow</span>
-        <span>Build rules. Move money automatically. On Arc.</span>
+        <span>Build rules. Split money on demand. On Arc.</span>
       </footer>
     </div>
   );

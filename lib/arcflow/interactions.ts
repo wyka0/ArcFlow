@@ -1,4 +1,4 @@
-import { encodeFunctionData, type Address, type Hex, type TypedDataDomain } from "viem";
+import { encodeFunctionData, decodeEventLog, type Address, type Hex, type TypedDataDomain } from "viem";
 
 import { ARCFLOW_ABI, getArcFlowContractAddress, ARCFLOW_V2_ABI, getArcFlowV2ContractAddress } from "./contract";
 import { getActiveArcNetwork, type ArcNetwork } from "../arc/network";
@@ -55,6 +55,31 @@ export function parseUsdcAmount(amount: string): bigint {
     throw new Error("Invalid USDC amount");
   }
   return toUsdcBaseUnits(num);
+}
+
+/**
+ * Convert a human split percentage (0–100) into contract basis points (0–10000).
+ *
+ * The flow builder stores each action's allocation as a percentage where
+ * `80` means 80%. The V1 `createFlow` ABI expects basis points whose sum must
+ * equal 10000, so `80` must become `8000`.
+ *
+ * This is the single conversion point — apply it exactly once, at the boundary
+ * between the wizard's `Flow` and the contract call. To make double conversion
+ * impossible, any value outside 0–100 (for example an already-converted `8000`)
+ * is rejected rather than multiplied again.
+ */
+export function percentToBasisPoints(percent: number): number {
+  if (!Number.isInteger(percent)) {
+    throw new Error(`Split percentage must be a whole number (received ${percent}).`);
+  }
+  if (percent < 0 || percent > 100) {
+    throw new Error(
+      `Split percentage must be between 0 and 100 (received ${percent}); ` +
+        `values such as 8000 are basis points and are rejected to prevent double conversion.`,
+    );
+  }
+  return percent * 100;
 }
 
 /** Encode createFlow transaction data. */
@@ -136,7 +161,9 @@ export function encodeExecuteSplit(params: ExecuteSplitParams, network: ArcNetwo
 
 /** Encode approve USDC for ArcFlow transaction data. */
 export function encodeApproveUsdcForArcFlow(amount: string, network: ArcNetwork = getActiveArcNetwork()): { to: Address; data: Hex } {
-  const usdcAddress = getActiveArcNetwork().usdcAddress;
+  // Resolve BOTH the token and the spender from the SAME network argument so a
+  // multi-network setup can never approve one token to another chain's contract.
+  const usdcAddress = network.usdcAddress;
   return {
     to: usdcAddress,
     data: encodeFunctionData({
@@ -147,7 +174,12 @@ export function encodeApproveUsdcForArcFlow(amount: string, network: ArcNetwork 
   };
 }
 
-/** Read a single flow from the contract. */
+/**
+ * Read a single flow from the contract.
+ *
+ * NOT IMPLEMENTED — stub. Always returns `null`; no on-chain read is performed.
+ * Do not treat this as a working flow query.
+ */
 export async function readFlow(
   flowId: bigint,
   network: ArcNetwork = getActiveArcNetwork()
@@ -160,7 +192,47 @@ export async function readFlow(
   return null;
 }
 
-/** Read flows by owner from the contract. */
+/**
+ * Extract the `flowId` of a newly created flow from the confirmed `createFlow`
+ * transaction's receipt logs by decoding the `FlowCreated` event.
+ *
+ * Returns `null` when the event is absent or unreadable (wrong contract, a
+ * reverted call, or a receipt without logs). Callers MUST treat `null` as a
+ * hard failure and stop — a flow id is never guessed.
+ */
+export function extractCreatedFlowId(
+  logs: readonly { address: string; topics: readonly string[]; data: string }[],
+  network: ArcNetwork = getActiveArcNetwork()
+): bigint | null {
+  const contractAddress = getArcFlowContractAddress(network);
+  if (contractAddress === "0x") return null;
+  const expected = contractAddress.toLowerCase();
+
+  for (const log of logs) {
+    if (log.address.toLowerCase() !== expected) continue;
+    try {
+      const decoded = decodeEventLog({
+        abi: ARCFLOW_ABI,
+        eventName: "FlowCreated",
+        data: log.data as Hex,
+        topics: log.topics as [Hex, ...Hex[]],
+      });
+      const flowId = (decoded.args as { flowId?: unknown }).flowId;
+      if (typeof flowId === "bigint") return flowId;
+    } catch {
+      // Not a FlowCreated log — keep scanning the remaining logs.
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Read flows by owner from the contract.
+ *
+ * NOT IMPLEMENTED — stub. Always returns `[]`; no on-chain read is performed.
+ * The UI does not list flows from chain state.
+ */
 export async function readFlowsByOwner(
   owner: Address,
   network: ArcNetwork = getActiveArcNetwork()
@@ -173,7 +245,11 @@ export async function readFlowsByOwner(
   return [];
 }
 
-/** Read flow count from the contract. */
+/**
+ * Read flow count from the contract.
+ *
+ * NOT IMPLEMENTED — stub. Always returns `0n`; no on-chain read is performed.
+ */
 export async function readFlowCount(
   network: ArcNetwork = getActiveArcNetwork()
 ): Promise<bigint> {
@@ -368,6 +444,21 @@ export function prepareExecuteSplitTx(
     value: 0n,
     chainId: network.chainId,
     description: `Execute Flow #${params.flowId}: Split ${params.amount} USDC`,
+  };
+}
+
+/** Prepare activate flow transaction */
+export function prepareActivateFlowTx(
+  flowId: bigint,
+  network: ArcNetwork = getActiveArcNetwork()
+): { to: Address; data: Hex; value: bigint; chainId: number; description: string } {
+  const encoded = encodeActivateFlow(flowId, network);
+  return {
+    to: encoded.to,
+    data: encoded.data,
+    value: 0n,
+    chainId: network.chainId,
+    description: `Activate Flow #${flowId}`,
   };
 }
 

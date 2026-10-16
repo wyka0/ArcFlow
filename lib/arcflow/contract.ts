@@ -104,13 +104,39 @@ export const ARCFLOW_ABI = [
   ], outputs: [] }
 ] as const;
 
+/**
+ * Resolve the V1 contract address.
+ *
+ * RETAINED SINGLE-NETWORK ASSUMPTION (Phase 23.59): the address comes from one
+ * env value (`NEXT_PUBLIC_ARCFLOW_CONTRACT_ADDRESS`); the `network` argument is
+ * accepted for call-site symmetry but intentionally does not select a different
+ * address per chain. Correcting this would require per-network env vars
+ * (a configuration change), so it is documented rather than changed. Because
+ * the value is unset in every environment we ship, this returns the `"0x"`
+ * placeholder and `isArcFlowConfigured()` is `false` — production deployment
+ * stays disabled.
+ */
 export function getArcFlowContractAddress(network: ArcNetwork): `0x${string}` {
+  void network; // single-network assumption — see doc comment above
   return ARCFLOW_CONTRACT_ADDRESS as `0x${string}`;
 }
 
 export function isArcFlowConfigured(network: ArcNetwork): boolean {
   const address = getArcFlowContractAddress(network);
   return address !== "0x" && address.length === 42;
+}
+
+const CONTRACT_ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/;
+
+/**
+ * Resolve the V1 contract address for display, or `null` when it is not a
+ * well-formed address (unset placeholder "0x", malformed, or missing env).
+ * Callers MUST validate before rendering an explorer link so a placeholder is
+ * never presented as a real address.
+ */
+export function resolveArcFlowContractAddress(network: ArcNetwork): `0x${string}` | null {
+  const address = getArcFlowContractAddress(network);
+  return CONTRACT_ADDRESS_PATTERN.test(address) ? (address as `0x${string}`) : null;
 }
 
 export const ARCFLOW_V2_ABI = [

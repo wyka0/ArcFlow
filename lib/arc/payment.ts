@@ -108,20 +108,42 @@ export function prepareUsdcPayment(
   };
 }
 
-export type ReceiptFailureReason = "TRANSACTION_REVERTED" | "RPC_UNAVAILABLE";
+export type ReceiptFailureReason =
+  /** Confirmed failure: the transaction was mined and its status is `reverted`. */
+  | "TRANSACTION_REVERTED"
+  /** The node could not be reached while waiting. The outcome is UNKNOWN. */
+  | "RPC_UNAVAILABLE"
+  /** The receipt wait timed out. The outcome is UNKNOWN. */
+  | "CONFIRMATION_UNKNOWN";
+
+/**
+ * The minimal, structurally-typed log shape needed to decode events out of a
+ * confirmed receipt. Matches viem's `Log` for these three fields, so real
+ * receipts are assignable without casting.
+ */
+export interface MinimalReceiptLog {
+  address: string;
+  topics: readonly string[];
+  data: string;
+}
 
 export type UsdcReceiptOutcome =
-  | { ok: true; transactionHash: TransactionHash; blockNumber: bigint }
+  | { ok: true; transactionHash: TransactionHash; blockNumber: bigint; logs: readonly MinimalReceiptLog[] }
   | { ok: false; reason: ReceiptFailureReason; message: string };
 
 /**
  * Classify a transaction receipt. Pure: a receipt only counts as confirmed when
  * the chain reports `status === "success"`.
+ *
+ * The confirmed receipt's `logs` are carried through (empty when absent) so a
+ * caller can decode emitted events — e.g. the created flow id — from the same
+ * confirmed transaction instead of guessing it.
  */
 export function classifyReceipt(receipt: {
   transactionHash: string;
   status: "success" | "reverted";
   blockNumber: bigint;
+  logs?: readonly MinimalReceiptLog[];
 }): UsdcReceiptOutcome {
   if (receipt.status !== "success") {
     return {
@@ -134,31 +156,42 @@ export function classifyReceipt(receipt: {
     ok: true,
     transactionHash: receipt.transactionHash as TransactionHash,
     blockNumber: receipt.blockNumber,
+    logs: receipt.logs ?? [],
   };
 }
 
 /**
  * Wait for the real Arc receipt and classify it.
  *
- * Never reports success on an RPC failure or a missing receipt.
+ * Never reports success on an RPC failure, a missing receipt, or a timeout.
+ * A confirmed revert is distinct from an UNKNOWN outcome (timeout / RPC error);
+ * callers must never resubmit a transaction whose outcome is unknown.
  */
 export async function verifyUsdcTransaction(
   client: PublicClient,
   transactionHash: TransactionHash,
-  options: { confirmations?: number } = {},
+  options: { confirmations?: number; timeoutMs?: number } = {},
 ): Promise<UsdcReceiptOutcome> {
   try {
     const receipt = await client.waitForTransactionReceipt({
       hash: transactionHash,
       confirmations: options.confirmations ?? 1,
+      timeout: options.timeoutMs ?? 180_000,
     });
     return classifyReceipt(receipt);
-  } catch {
+  } catch (error) {
+    const isTimeout =
+      typeof error === "object" &&
+      error !== null &&
+      (error as { name?: unknown }).name === "WaitForTransactionReceiptTimeoutError";
     return {
       ok: false,
-      reason: "RPC_UNAVAILABLE",
-      message:
-        "The transaction was submitted but its Arc receipt could not be confirmed. It is not marked confirmed.",
+      reason: isTimeout ? "CONFIRMATION_UNKNOWN" : "RPC_UNAVAILABLE",
+      message: isTimeout
+        ? "Timed out waiting for the Arc transaction receipt. The transaction may still confirm — " +
+          "its outcome is UNKNOWN. Do not resubmit blindly; check the explorer first."
+        : "The transaction was submitted but its Arc receipt could not be confirmed. " +
+          "Its outcome is UNKNOWN. Do not resubmit blindly.",
     };
   }
 }

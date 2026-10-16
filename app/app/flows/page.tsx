@@ -35,10 +35,10 @@ export default function FlowsPage() {
             <EmptyIcon>
               <Workflow />
             </EmptyIcon>
-            <EmptyTitle>No automated flows yet</EmptyTitle>
+            <EmptyTitle>No flows configured yet</EmptyTitle>
             <EmptyDescription>
-              Create your first programmable-money workflow to automatically split incoming USDC
-              payments.
+              Create your first workflow to split USDC. Each run is started manually from the
+              Flow Builder — no background monitoring yet.
             </EmptyDescription>
             <EmptyAction>
               <Link href="/app/flows/new">
@@ -64,7 +64,8 @@ export default function FlowsPage() {
                       <Badge variant="accent">Template</Badge>
                     </div>
                     <p className="mt-1 text-sm text-muted-foreground">
-                      When payment ≥ 10 USDC, split 80% to Treasury and 20% to Contributor
+                      Configured threshold ≥ 10 USDC · split 80% to Treasury and 20% to Contributor
+                      on execution
                     </p>
                     <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
                       <span className="text-muted-foreground">
@@ -98,7 +99,7 @@ export default function FlowsPage() {
 
       <footer className="mt-8 flex flex-col items-center justify-between gap-2 text-xs text-muted-foreground md:flex-row">
         <span className="font-medium text-foreground">ArcFlow</span>
-        <span>Build rules. Move money automatically. On Arc.</span>
+        <span>Build rules. Split money on demand. On Arc.</span>
       </footer>
     </div>
   );

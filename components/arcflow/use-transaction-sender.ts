@@ -3,15 +3,12 @@
 import { useCallback, useState } from "react";
 import { useWallet } from "@/components/wallet-provider";
 import { createArcReadClient } from "@/lib/arc/client";
-import { getActiveArcNetwork, type ArcNetwork } from "@/lib/arc/network";
 import { verifyUsdcTransaction } from "@/lib/arc/payment";
 import type { PreparedTransaction } from "@/lib/arcflow/interactions";
 import type { TransactionHash } from "@/lib/arcflow";
+import { submitTransaction, type SubmittedTransaction } from "@/lib/arcflow/send-transaction";
 
-interface SendTransactionResult {
-  transactionHash: TransactionHash;
-  blockNumber: bigint;
-}
+type SendTransactionResult = SubmittedTransaction;
 
 interface UseTransactionSenderReturn {
   sendTransaction: (tx: PreparedTransaction) => Promise<SendTransactionResult>;
@@ -21,7 +18,10 @@ interface UseTransactionSenderReturn {
 
 /**
  * Hook for sending transactions via the connected wallet.
- * Uses the existing wallet provider's EIP-1193 provider.
+ *
+ * All submission logic lives in `submitTransaction` (a pure, unit-tested core):
+ * a pre-submission chain/account guard, standards-compatible EIP-1193 params,
+ * and revert-vs-unknown receipt classification. This hook only adds React state.
  */
 export function useTransactionSender(): UseTransactionSenderReturn {
   const { session, providerRef, network } = useWallet();
@@ -43,39 +43,21 @@ export function useTransactionSender(): UseTransactionSenderReturn {
     setError(null);
 
     try {
-      // Send transaction via EIP-1193
-      const hash = await provider.request({
-        method: "eth_sendTransaction",
-        params: [{
-          from: address,
-          to: tx.to,
-          data: tx.data,
-          value: "0x0",
-          chainId: `0x${tx.chainId.toString(16)}`,
-        }],
+      return await submitTransaction({
+        provider,
+        transaction: tx,
+        expectedAccount: address,
+        verify: (hash) => {
+          const publicClient = createArcReadClient(network);
+          return verifyUsdcTransaction(publicClient, hash as TransactionHash, { confirmations: 1 });
+        },
       });
-
-      if (typeof hash !== "string" || !hash.startsWith("0x")) {
-        throw new Error("Invalid transaction hash returned");
-      }
-
-      // Wait for confirmation using public client
-      const publicClient = createArcReadClient(network);
-      
-      const result = await verifyUsdcTransaction(publicClient, hash as TransactionHash, { confirmations: 1 });
-      
-      if (!result.ok) {
-        throw new Error(result.message);
-      }
-
-      return {
-        transactionHash: result.transactionHash,
-        blockNumber: result.blockNumber,
-      };
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Transaction failed";
-      setError(message);
-      throw new Error(message);
+      const failure = err instanceof Error ? err : new Error("Transaction failed");
+      setError(failure.message);
+      // Re-throw the ORIGINAL error so callers can distinguish a confirmed
+      // revert from an unknown outcome (e.g. `UnknownTransactionOutcomeError`).
+      throw failure;
     } finally {
       setIsSending(false);
     }

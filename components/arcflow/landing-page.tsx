@@ -183,7 +183,7 @@ export function LandingPage() {
           <span className="text-[10px] font-bold uppercase tracking-[0.2em]">ArcFlow</span>
           <div className="flex flex-wrap items-center justify-center gap-6 text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
             <span>Build rules</span>
-            <span>Move money automatically</span>
+            <span>Split money on demand</span>
             <span>On Arc</span>
           </div>
         </div>

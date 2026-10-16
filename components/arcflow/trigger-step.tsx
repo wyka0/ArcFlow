@@ -12,7 +12,7 @@ export function TriggerStep({ active, completed }: TriggerStepProps) {
   const trigger = {
     type: "PAYMENT_RECEIVED" as const,
     label: "Payment Received",
-    description: "Detect an incoming USDC payment on Arc.",
+    description: "Records the payment event this workflow is configured for.",
   };
 
   return (
@@ -46,7 +46,7 @@ export function TriggerStep({ active, completed }: TriggerStepProps) {
               </div>
               <div className="flex-1">
                 <span className="text-sm font-medium text-foreground">{trigger.label}</span>
-                <p className="mt-0.5 text-xs text-muted-foreground">Detect an incoming USDC payment on Arc</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">Configured for incoming USDC payments on Arc</p>
               </div>
               <span className="text-xs text-accent">Only trigger</span>
             </div>
@@ -54,7 +54,8 @@ export function TriggerStep({ active, completed }: TriggerStepProps) {
         </div>
         {active && (
           <p className="mt-4 text-xs text-muted-foreground">
-            Currently supports Payment Received triggers.
+            Currently supports the Payment Received trigger as configuration. No background
+            monitoring yet — each split is started manually from the Flow Builder.
           </p>
         )}
       </CardBody>

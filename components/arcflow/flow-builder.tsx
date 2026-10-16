@@ -5,7 +5,7 @@ import { motion } from "framer-motion";
 import { Card, CardBody } from "@/components/card";
 import { Button } from "@/components/ui/button";
 import { useWallet } from "@/components/wallet-provider";
-import { isArcFlowConfigured } from "@/lib/arcflow/contract";
+import { isArcFlowConfigured, resolveArcFlowContractAddress } from "@/lib/arcflow/contract";
 import { useTransactionSender } from "./use-transaction-sender";
 import type { Flow, FlowValidationError } from "@/types/flow";
 import { validateFlow, validateStep, formatAddress, DEFAULT_FLOW } from "@/types/flow";
@@ -14,22 +14,24 @@ import { ConditionStep } from "./condition-step";
 import { ActionStep } from "./action-step";
 import { FlowPreviewCard } from "./flow-preview";
 import { StepHeader } from "./step-indicator";
-import { 
-  prepareCreateFlowTx, 
-  prepareApproveUsdcTx, 
-  prepareExecuteSplitTx,
-} from "@/lib/arcflow/interactions";
+import { deployFlow } from "@/lib/arcflow/deploy-flow";
+import { UnknownTransactionOutcomeError } from "@/lib/arcflow/send-transaction";
 import { getActiveArcNetwork } from "@/lib/arc/network";
 
 type Step = "trigger" | "condition" | "action" | "review" | "deploying";
 
 interface DeploymentState {
-  phase: "idle" | "create" | "approve" | "execute" | "complete" | "error";
+  phase: "idle" | "create" | "activate" | "approve" | "execute" | "complete" | "error";
   flowId?: bigint;
   createTxHash?: string;
+  activateTxHash?: string;
   approveTxHash?: string;
   executeTxHash?: string;
   error?: string;
+  /** True when the outcome is UNKNOWN (timeout / RPC error), not a confirmed failure. */
+  outcomeUnknown?: boolean;
+  /** The submitted hash whose outcome is unknown, for explorer lookup. */
+  uncertainTxHash?: string;
 }
 
 interface FlowBuilderProps {
@@ -135,72 +137,25 @@ export function FlowBuilder({ initialFlow, onActivate }: FlowBuilderProps) {
     setDeployment({ phase: "create" });
 
     try {
-      // Step 1: Create Flow
-      const treasuryAddress = flow.actions?.[0]?.recipient as `0x${string}` | undefined;
-      const contributorAddress = flow.actions?.[1]?.recipient as `0x${string}` | undefined;
-      const threshold = flow.condition?.amount || "10.00";
-      const treasuryBps = flow.actions?.[0]?.percentage || 80;
-      const contributorBps = flow.actions?.[1]?.percentage || 20;
-
-      if (!treasuryAddress || !contributorAddress) {
-        throw new Error("Recipient addresses not configured");
-      }
-
-      const createTx = prepareCreateFlowTx({
-        treasury: treasuryAddress,
-        contributor: contributorAddress,
-        threshold,
-        treasuryBps,
-        contributorBps,
+      await deployFlow({
+        flow,
+        network,
+        sendTransaction,
+        onProgress: (progress) => {
+          setDeployment((prev) => ({ ...prev, ...progress }));
+        },
       });
-
-      setDeployment(prev => ({ ...prev, phase: "create" }));
-      const createResult = await sendTransaction(createTx);
-
-      // Extract flowId from event logs (simplified - in reality we'd parse logs)
-      // For now, we'll assume flowId 0 for first flow
-      const flowId = 0n;
-
-      setDeployment(prev => ({ 
-        ...prev, 
-        phase: "approve", 
-        flowId,
-        createTxHash: createResult.transactionHash 
-      }));
-
-      // Step 2: Approve USDC
-      const executeAmount = threshold; // Execute with threshold amount for demo
-      const approveTx = prepareApproveUsdcTx(executeAmount);
-      
-      setDeployment(prev => ({ ...prev, phase: "approve" }));
-      const approveResult = await sendTransaction(approveTx);
-
-      setDeployment(prev => ({ 
-        ...prev, 
-        phase: "execute", 
-        approveTxHash: approveResult.transactionHash 
-      }));
-
-      // Step 3: Execute Split
-      const executeTx = prepareExecuteSplitTx({ flowId, amount: executeAmount });
-      
-      setDeployment(prev => ({ ...prev, phase: "execute" }));
-      const executeResult = await sendTransaction(executeTx);
-
-      setDeployment(prev => ({ 
-        ...prev, 
-        phase: "complete", 
-        executeTxHash: executeResult.transactionHash 
-      }));
-
     } catch (error) {
-      setDeployment(prev => ({ 
-        ...prev, 
-        phase: "error", 
-        error: error instanceof Error ? error.message : "Deployment failed" 
+      const outcomeUnknown = error instanceof UnknownTransactionOutcomeError;
+      setDeployment(prev => ({
+        ...prev,
+        phase: "error",
+        outcomeUnknown,
+        uncertainTxHash: outcomeUnknown ? error.transactionHash : undefined,
+        error: error instanceof Error ? error.message : "Deployment failed",
       }));
     }
-  }, [canDeploy, sendTransaction, network]);
+  }, [canDeploy, sendTransaction, network, flow]);
 
   const isStepCompleted = (step: Step) => {
     const index = stepOrder.indexOf(step);
@@ -537,9 +492,12 @@ function DeploymentScreen({
 }) {
   const phases = [
     { key: "create", label: "CREATE FLOW", description: "Deploying flow contract..." },
+    { key: "activate", label: "ACTIVATE FLOW", description: "Activating flow for execution..." },
     { key: "approve", label: "APPROVE USDC", description: "Approving USDC spend..." },
     { key: "execute", label: "EXECUTE SPLIT", description: "Executing payment split..." },
   ];
+
+  const contractAddress = resolveArcFlowContractAddress(network);
 
   const currentPhaseIndex = phases.findIndex(p => p.key === deployment.phase);
   const isComplete = deployment.phase === "complete";
@@ -552,7 +510,7 @@ function DeploymentScreen({
       transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
       className="space-y-6"
     >
-      <Card variant={isError ? "primary" : "default"} className={isError ? "border-destructive" : isComplete ? "border-success" : "border-accent"}>
+      <Card variant={isError ? "primary" : "default"} className={isError ? (deployment.outcomeUnknown ? "border-warning" : "border-destructive") : isComplete ? "border-success" : "border-accent"}>
         <CardBody className="pt-6">
           {/* Progress Steps */}
           <div className="mb-6">
@@ -588,6 +546,16 @@ function DeploymentScreen({
                     View tx
                   </a>
                 )}
+                {deployment.activateTxHash && phase.key === "activate" && (
+                  <a
+                    href={`${network.explorerUrl}/tx/${deployment.activateTxHash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs font-mono text-accent hover:underline"
+                  >
+                    View tx
+                  </a>
+                )}
                 {deployment.approveTxHash && phase.key === "approve" && (
                   <a 
                     href={`${network.explorerUrl}/tx/${deployment.approveTxHash}`}
@@ -612,7 +580,38 @@ function DeploymentScreen({
             ))}
           </div>
 
-          {isError && (
+          {isError && deployment.outcomeUnknown && (
+            <div className="rounded-lg border border-warning bg-warning/10 p-4 text-sm text-warning">
+              <div className="mb-1 flex items-center gap-2">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                  <line x1={12} y1={9} x2={12} y2={13} />
+                  <line x1={12} y1={17} x2={12.01} y2={17} />
+                </svg>
+                <span className="font-semibold">Confirmation unknown</span>
+              </div>
+              <p className="ml-6">
+                The transaction was submitted but its result could not be confirmed. It may still
+                confirm on Arc — this is not a confirmed failure. Check the explorer below before
+                retrying, and do not resubmit blindly.
+              </p>
+              {deployment.uncertainTxHash && (
+                <p className="ml-6 mt-2">
+                  Submitted tx:{" "}
+                  <a
+                    href={`${network.explorerUrl}/tx/${deployment.uncertainTxHash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-mono underline"
+                  >
+                    {deployment.uncertainTxHash.slice(0, 10)}...
+                  </a>
+                </p>
+              )}
+            </div>
+          )}
+
+          {isError && !deployment.outcomeUnknown && (
             <div className="rounded-lg border border-destructive bg-destructive/10 p-4 text-sm text-destructive">
               <div className="mb-1 flex items-center gap-2">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -637,7 +636,21 @@ function DeploymentScreen({
               </div>
               <div className="ml-6 space-y-1">
                 <p>Flow ID: <span className="font-bold">#{deployment.flowId?.toString()}</span></p>
-                <p>Contract: <a href={`${network.explorerUrl}/address/${"0xArcFlowContractAddress"}`} target="_blank" rel="noopener noreferrer" className="underline">ArcFlow</a></p>
+                <p>
+                  Contract:{" "}
+                  {contractAddress ? (
+                    <a
+                      href={`${network.explorerUrl}/address/${contractAddress}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline"
+                    >
+                      {contractAddress}
+                    </a>
+                  ) : (
+                    <span className="font-mono">unavailable</span>
+                  )}
+                </p>
                 <p>Execute tx: <a href={`${network.explorerUrl}/tx/${deployment.executeTxHash}`} target="_blank" rel="noopener noreferrer" className="underline">{deployment.executeTxHash?.slice(0, 10)}...</a></p>
               </div>
             </div>

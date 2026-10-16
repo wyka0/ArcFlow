@@ -49,7 +49,7 @@ const statCards = [
 
 const templateFlow = {
   name: "Revenue Split",
-  description: "When payment ≥ 10 USDC, split 80% to Treasury and 20% to Contributor",
+  description: "Configured threshold ≥ 10 USDC · split 80% to Treasury and 20% to Contributor on execution",
   trigger: "Payment Received",
   condition: "≥ 10 USDC",
   actions: [
@@ -106,10 +106,10 @@ export function Dashboard() {
             <EmptyIcon>
               <Workflow />
             </EmptyIcon>
-            <EmptyTitle>No automated flows yet</EmptyTitle>
+            <EmptyTitle>No flows configured yet</EmptyTitle>
             <EmptyDescription>
-              Create your first programmable-money workflow to automatically split incoming
-              USDC payments.
+              Create your first workflow to split USDC. Each run is started manually
+              from the Flow Builder — no background monitoring yet.
             </EmptyDescription>
             <EmptyAction>
               <Link href="/app/flows/new">
@@ -177,7 +177,7 @@ export function Dashboard() {
         <span className="flex items-center gap-1.5 font-medium text-foreground">
           ArcFlow
         </span>
-        <span>Build rules. Move money automatically. On Arc.</span>
+        <span>Build rules. Split money on Arc.</span>
       </footer>
     </div>
   );
