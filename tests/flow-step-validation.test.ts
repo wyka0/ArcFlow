@@ -9,6 +9,8 @@ import {
 } from "@/types/flow";
 
 const VALID_RECIPIENT_A = "0xAbC1234567890aBcD1234567890abcD123456789" as const;
+/** Same address as VALID_RECIPIENT_A, all lowercase (case-insensitivity test input). */
+const VALID_RECIPIENT_A_LOWER = "0xabc1234567890abcd1234567890abcd123456789" as const;
 const VALID_RECIPIENT_B = "0xDef4567890abcdef4567890abcdef4567890abcd" as const;
 
 /**
@@ -266,5 +268,61 @@ describe("threshold precision (Phase 42)", () => {
       const errors = validateFlow(withAmount(amount));
       expect(errors.some(e => e.field === "condition.amount")).toBe(true);
     }
+  });
+});
+
+describe("distinct recipient addresses (Phase 49B.9.1)", () => {
+  it("rejects identical addresses in identical casing", () => {
+    const flow: Partial<Flow> = {
+      ...VALID_FLOW,
+      actions: [
+        { type: "TRANSFER", recipient: VALID_RECIPIENT_A, percentage: 80 },
+        { type: "TRANSFER", recipient: VALID_RECIPIENT_A, percentage: 20 },
+      ],
+    };
+    const errors = validateFlow(flow);
+    expect(errors.some(e => e.field === "actions" && e.message.includes("two different addresses"))).toBe(true);
+  });
+
+  it("rejects identical addresses differing only by letter casing", () => {
+    // Same address as VALID_RECIPIENT_A, all lowercase: EVM addresses are
+    // case-insensitive, so this must be treated as identical.
+    const flow: Partial<Flow> = {
+      ...VALID_FLOW,
+      actions: [
+        { type: "TRANSFER", recipient: VALID_RECIPIENT_A, percentage: 80 },
+        { type: "TRANSFER", recipient: "0xabc1234567890abcd1234567890abcd123456789", percentage: 20 },
+      ],
+    };
+    const errors = validateFlow(flow);
+    expect(errors.some(e => e.field === "actions" && e.message.includes("two different addresses"))).toBe(true);
+  });
+
+  it("accepts two different valid addresses (no distinct-address error)", () => {
+    const errors = validateFlow(VALID_FLOW);
+    expect(errors.some(e => e.message.includes("two different addresses"))).toBe(false);
+    expect(errors).toHaveLength(0);
+  });
+
+  it("placeholder drafts report address errors without a distinct-address error", () => {
+    // DEFAULT_FLOW carries two "0x" placeholders: malformed, so the existing
+    // address errors must remain and the distinctness rule must not fire.
+    const errors = validateFlow(DEFAULT_FLOW);
+    expect(errors.filter(e => e.message.includes("Valid EVM address required")).length).toBe(2);
+    expect(errors.some(e => e.message.includes("two different addresses"))).toBe(false);
+  });
+
+  it("review/deployment progression is blocked for duplicate recipients (shared gate)", () => {
+    const flow: Partial<Flow> = {
+      ...VALID_FLOW,
+      actions: [
+        { type: "TRANSFER", recipient: VALID_RECIPIENT_A, percentage: 80 },
+        { type: "TRANSFER", recipient: VALID_RECIPIENT_A_LOWER, percentage: 20 },
+      ],
+    };
+    // The action step owns "actions" errors, so both the desktop footer
+    // "Review" and the mobile "Review & Deploy" paths (validateAll) block.
+    expect(validateStep(flow, "action").some(e => e.message.includes("two different addresses"))).toBe(true);
+    expect(validateFlow(flow).some(e => e.message.includes("two different addresses"))).toBe(true);
   });
 });

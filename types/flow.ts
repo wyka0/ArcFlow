@@ -73,6 +73,22 @@ export function validateFlow(flow: Partial<Flow>): FlowValidationError[] {
       });
     }
 
+    // The V1 contract reverts `createFlow` with `IdenticalRecipients` when both
+    // recipients are the same address. Compare case-insensitively: EVM
+    // addresses differing only by letter casing are the same address. Gated on
+    // both being valid so placeholder drafts report only the address errors.
+    if (
+      flow.actions.length === 2 &&
+      isValidAddress(flow.actions[0].recipient) &&
+      isValidAddress(flow.actions[1].recipient) &&
+      flow.actions[0].recipient.toLowerCase() === flow.actions[1].recipient.toLowerCase()
+    ) {
+      errors.push({
+        field: "actions",
+        message: "Treasury and contributor must be two different addresses",
+      });
+    }
+
     let totalPercentage = 0;
     flow.actions.forEach((action, index) => {
       if (!action.recipient || !isValidAddress(action.recipient)) {
