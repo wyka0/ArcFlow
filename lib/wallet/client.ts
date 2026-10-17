@@ -133,7 +133,19 @@ export function subscribeProvider(
   };
 
   const chainListener = (...args: unknown[]) => {
-    handlers.onChainChanged(parseChainId(args[0]));
+    try {
+      handlers.onChainChanged(parseChainId(args[0]));
+    } catch {
+      // Mirror the accountsChanged guard: a provider-emitter that propagates
+      // listener throws must never crash the page. One neutral fallback keeps
+      // the session in the safe wrong-network/unknown state; if even that
+      // throws (a broken handler), swallow — there is no safe surface here.
+      try {
+        handlers.onChainChanged(null);
+      } catch {
+        /* the handler itself is broken; nothing safe to dispatch */
+      }
+    }
   };
 
   provider.on("accountsChanged", accountsListener);

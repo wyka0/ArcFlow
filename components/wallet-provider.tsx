@@ -14,7 +14,7 @@ import { custom } from "viem";
 
 import { createArcReadClient } from "@/lib/arc/client";
 import { getActiveArcNetwork, type ArcNetwork } from "@/lib/arc/network";
-import { readUsdcBalance } from "@/lib/arc/usdc";
+import { readUsdcBalance, readUsdcBalanceWithTimeout } from "@/lib/arc/usdc";
 import {
   getAccounts,
   getChainId,
@@ -153,7 +153,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
     void (async () => {
       const client = createArcReadClient(network, custom({ request: (args) => provider.request(args) }));
-      const result = await readUsdcBalance({ client, network, address: walletAddress });
+      // Phase 49B.11.2 — wallet-proxied reads are bounded: immediately after a
+      // chain switch the wallet's own RPC can be slow or unreachable, and an
+      // unbounded wait would pin the UI on "reading" forever. A timed-out read
+      // maps to the existing typed unavailable state; a late settlement is
+      // discarded (never overwriting newer wallet/chain state).
+      const result = await readUsdcBalanceWithTimeout(
+        readUsdcBalance({ client, network, address: walletAddress }),
+      );
       if (cancelled) return;
 
       if (result.ok) {

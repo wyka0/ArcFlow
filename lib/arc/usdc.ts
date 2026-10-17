@@ -166,3 +166,52 @@ export async function readUsdcBalance(input: {
     return settleUsdcRead({ ok: false, error }, { address, decimals: network.usdcDecimals, now });
   }
 }
+
+/** Bounded wait for wallet-proxied balance reads (Phase 49B.11.2). */
+export const WALLET_BALANCE_TIMEOUT_MS = 15_000;
+
+/**
+ * Race a USDC balance read against a bounded timeout (Phase 49B.11.2).
+ *
+ * Wallet-proxied reads route through the connected wallet's own RPC for the
+ * newly selected chain; immediately after a `chainChanged` that endpoint can be
+ * slow or unreachable, and an unbounded wait would leave the UI on "reading"
+ * forever. On timeout this resolves with the existing typed
+ * `RPC_UNAVAILABLE` state — it never throws and never fabricates a balance.
+ *
+ * A completion that arrives after the timeout is deliberately discarded so a
+ * stale read cannot overwrite newer wallet/chain state; its rejection (if any)
+ * is suppressed to avoid an unhandled rejection.
+ */
+export async function readUsdcBalanceWithTimeout(
+  read: Promise<UsdcBalanceResult>,
+  timeoutMs: number = WALLET_BALANCE_TIMEOUT_MS,
+): Promise<UsdcBalanceResult> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<UsdcBalanceResult>((resolve) => {
+    timer = setTimeout(() => {
+      resolve({
+        ok: false,
+        error: {
+          code: "RPC_UNAVAILABLE",
+          message: "The wallet did not respond in time. Balance unavailable.",
+        },
+      });
+    }, timeoutMs);
+  });
+
+  // Suppress a late rejection: once the race has settled on the timeout, an
+  // unobserved rejection of `read` must not become an unhandled rejection.
+  void read.catch(() => {});
+
+  try {
+    return await Promise.race([read, timeout]);
+  } catch {
+    return {
+      ok: false,
+      error: { code: "RPC_UNAVAILABLE", message: "The wallet balance read failed." },
+    };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
