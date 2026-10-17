@@ -89,6 +89,10 @@ interface SenderOptions {
   /** Throws an UnknownTransactionOutcomeError at this send index. */
   unknownAtIndex?: number;
   flowId?: bigint;
+  /** Confirmed create receipt with NO FlowCreated log (decode hard-stop). */
+  omitFlowCreated?: boolean;
+  /** Confirmed create receipt with an unrelated/malformed log. */
+  malformedCreateLog?: boolean;
 }
 
 function makeSender(options: SenderOptions) {
@@ -109,7 +113,21 @@ function makeSender(options: SenderOptions) {
       throw new Error("The Arc transaction was mined but reverted. No payment was recorded.");
     }
 
-    const logs = selector === CREATE_SELECTOR ? [makeFlowCreatedLog(options.flowId ?? 0n)] : [];
+    const malformedTopics: `0x${string}`[] = [
+      ("0x" + "f".repeat(64)) as unknown as `0x${string}`,
+    ];
+    // Structural log shape (matches DeployReceiptLog) so both the viem-encoded
+    // FlowCreated log and the plain malformed log are assignable.
+    let logs: { address: string; topics: readonly string[]; data: string }[] =
+      selector === CREATE_SELECTOR ? [makeFlowCreatedLog(options.flowId ?? 0n)] : [];
+    if (selector === CREATE_SELECTOR) {
+      if (options.malformedCreateLog) {
+        // A log from the contract that is NOT a decodable FlowCreated event.
+        logs = [{ address: V1_ADDRESS, topics: malformedTopics, data: "0x" + "0".repeat(64) }];
+      } else if (options.omitFlowCreated) {
+        logs = [];
+      }
+    }
 
     return {
       transactionHash: `0x${"a".repeat(64)}` as `0x${string}`,
@@ -317,7 +335,77 @@ describe("unknown outcomes — propagate distinctly and stop the sequence", () =
 });
 
 // ============================================================
-// 4. Disclosure copy — four transactions + exact amount
+// 5. Create-receipt evidence survives flow-id decode failure (F2)
+// ============================================================
+
+describe("create receipt evidence — Phase 48.4 finding F2", () => {  it("missing FlowCreated event: confirmed hash is retained, message says the tx succeeded, nothing further is sent", async () => {
+    const { sender, selectors } = makeSender({ flowId: 9n, omitFlowCreated: true });
+
+    const patches: ProgressPatch[] = [];
+    let caught: unknown;
+    try {
+      await deploy.deployFlow({
+        flow: makeFlow(),
+        network: networkModule.ARC_MAINNET,
+        sendTransaction: sender,
+        onProgress: (p) => patches.push(p),
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    const message = (caught as Error).message;
+    expect(message).toContain("succeeded on-chain");
+    expect(message).toContain("Stopping before any further transaction");
+    expect(message).toContain(`0x${"a".repeat(64)}`); // the confirmed create hash
+
+    // The confirmed create hash surfaced through progress BEFORE the failure.
+    const state = accumulate(patches);
+    expect(state.phase).toBe("create");
+    expect(state.createTxHash).toBe(`0x${"a".repeat(64)}`);
+
+    // Hard stop: only the create transaction was ever submitted.
+    expect(selectors).toEqual([CREATE_SELECTOR]);
+  });
+
+  it("malformed event log: same hard stop with the confirmed hash retained", async () => {
+    const { sender, selectors } = makeSender({ flowId: 4n, malformedCreateLog: true });
+
+    const patches: ProgressPatch[] = [];
+    await expect(
+      deploy.deployFlow({
+        flow: makeFlow(),
+        network: networkModule.ARC_MAINNET,
+        sendTransaction: sender,
+        onProgress: (p) => patches.push(p),
+      }),
+    ).rejects.toThrow("succeeded on-chain");
+
+    const state = accumulate(patches);
+    expect(state.createTxHash).toBe(`0x${"a".repeat(64)}`);
+    expect(state.flowId).toBeUndefined(); // never guessed
+    expect(selectors).toEqual([CREATE_SELECTOR]);
+  });
+
+  it("unknown-outcome and restored-session copy never claim failure", () => {
+    const panel = deploy.UNKNOWN_OUTCOME_DISCLOSURE;
+    expect(panel).toContain("NOT been confirmed as failed");
+    expect(panel).toContain("may still confirm on Arc");
+    expect(panel).toContain("do not resubmit blindly");
+    expect(panel).toContain("blocked until you acknowledge");
+
+    const restored = deploy.RESTORED_UNKNOWN_OUTCOME_ERROR;
+    expect(restored).toContain("not a confirmed failure");
+    expect(restored).toContain("may still confirm on Arc");
+    expect(restored).not.toMatch(/transaction (was |has )?failed/i);
+    expect(restored).toContain("No new transaction has been sent since");
+  });
+});
+
+
+// ============================================================
+// 6. Disclosure copy — four transactions + exact amount + unknown outcome
 // ============================================================
 
 describe("deployment disclosure copy", () => {

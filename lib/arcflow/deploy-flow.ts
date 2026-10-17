@@ -105,12 +105,21 @@ export async function deployFlow(options: DeployFlowOptions): Promise<DeployFlow
     prepareCreateFlowTx({ treasury, contributor, threshold, treasuryBps, contributorBps }, network),
   );
 
+  // Phase 48.4 (finding F2) — surface the confirmed create hash BEFORE
+  // attempting flow-id extraction. Even if decoding fails below, the successful
+  // transaction's evidence is retained by the caller's progress handling.
+  onProgress?.({ phase: "create", createTxHash: createResult.transactionHash });
+
   // Resolve the real flow id from the confirmed receipt's FlowCreated event.
   // A missing/unreadable event is a hard stop — the id is never guessed.
   const flowId = extractCreatedFlowId(createResult.logs, network);
   if (flowId === null) {
+    // The create transaction itself SUCCEEDED (confirmed receipt); only the
+    // event decoding failed. Say so explicitly, retain the hash, and stop.
     throw new Error(
-      "Could not determine the created flow id from the confirmed transaction receipt. Stopping before any further transaction.",
+      "The createFlow transaction succeeded on-chain, but the created flow id could not be " +
+        "read from its confirmed receipt. Stopping before any further transaction — no other " +
+        `transaction was sent. Confirmed create transaction: ${createResult.transactionHash}`,
     );
   }
 
@@ -187,6 +196,22 @@ export const DEPLOYMENT_DISCLOSURE_STEPS = [
  */
 export const EXECUTION_AMOUNT_DISCLOSURE =
   "The split executes for exactly the threshold amount entered above. ArcFlow does not monitor payments and never executes automatically — every run is started manually.";
+
+/**
+ * Unknown-outcome panel disclosure (Phase 48.4). Rendered inside the
+ * `role="alert"` panel. Deliberately never claims the transaction failed: an
+ * unknown outcome is exactly that — unknown — and may still confirm on-chain.
+ */
+export const UNKNOWN_OUTCOME_DISCLOSURE =
+  "This submission has NOT been confirmed as failed — it may still confirm on Arc. Check the explorer before retrying, and do not resubmit blindly. Starting a new deployment is blocked until you acknowledge this risk.";
+
+/**
+ * Error text used when a persisted unknown-outcome record is restored after a
+ * reload/navigation (Phase 48.4, finding F1). Like the panel disclosure, it
+ * never claims the transaction failed.
+ */
+export const RESTORED_UNKNOWN_OUTCOME_ERROR =
+  "A previous deployment submission's outcome was not confirmed before the app was closed. It may still confirm on Arc — this is not a confirmed failure. No new transaction has been sent since.";
 
 /**
  * Synchronous single-flight + reconciliation gate for starting a deployment.

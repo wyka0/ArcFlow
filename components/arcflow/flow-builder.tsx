@@ -5,7 +5,7 @@ import { motion } from "framer-motion";
 import { Card, CardBody } from "@/components/card";
 import { Button } from "@/components/ui/button";
 import { useWallet } from "@/components/wallet-provider";
-import { isArcFlowConfigured, resolveArcFlowContractAddress } from "@/lib/arcflow/contract";
+import { isArcFlowConfigured, resolveArcFlowContractAddress, getArcFlowContractAddress } from "@/lib/arcflow/contract";
 import { useTransactionSender } from "./use-transaction-sender";
 import type { Flow, FlowValidationError } from "@/types/flow";
 import { validateFlow, validateStep, formatAddress, DEFAULT_FLOW } from "@/types/flow";
@@ -14,7 +14,9 @@ import { ConditionStep } from "./condition-step";
 import { ActionStep } from "./action-step";
 import { FlowPreviewCard } from "./flow-preview";
 import { StepHeader } from "./step-indicator";
-import { deployFlow, canBeginDeployment, applyDeploymentProgress, DEPLOYMENT_DISCLOSURE_STEPS, EXECUTION_AMOUNT_DISCLOSURE, type DeployStepKey, type UnresolvedDeployment } from "@/lib/arcflow/deploy-flow";
+import { deployFlow, canBeginDeployment, applyDeploymentProgress, DEPLOYMENT_DISCLOSURE_STEPS, EXECUTION_AMOUNT_DISCLOSURE, UNKNOWN_OUTCOME_DISCLOSURE, RESTORED_UNKNOWN_OUTCOME_ERROR, type DeployStepKey, type UnresolvedDeployment } from "@/lib/arcflow/deploy-flow";
+import { saveDeploymentRecoveryRecord, loadDeploymentRecoveryRecord, clearDeploymentRecoveryRecord } from "@/lib/arcflow/deployment-recovery";
+import { createBrowserStorage } from "@/lib/payments/storage";
 import { UnknownTransactionOutcomeError } from "@/lib/arcflow/send-transaction";
 import { getActiveArcNetwork } from "@/lib/arc/network";
 
@@ -57,6 +59,9 @@ export function FlowBuilder({ initialFlow }: FlowBuilderProps) {
   // Tracks the failing phase synchronously (state may not have flushed when a
   // send rejects), so partial completion can be attributed to the right step.
   const journeyPhaseRef = useRef<DeployStepKey | null>(null);
+  // The created flow id, tracked synchronously so the durable recovery record
+  // can include it when an unknown outcome happens after a confirmed create.
+  const journeyFlowIdRef = useRef<bigint | null>(null);
   // A submitted transaction whose outcome is unknown. While set, a blind
   // restart of the deployment journey is blocked until the user explicitly
   // acknowledges the risk (or reconciles the outcome on the explorer).
@@ -164,14 +169,64 @@ export function FlowBuilder({ initialFlow }: FlowBuilderProps) {
    * Phase 48.1 — explicit acknowledgment that a previous submission's outcome
    * is unknown. Clears the reconciliation block and returns to the builder so
    * a new deployment journey is only ever started deliberately.
+   *
+   * Phase 48.4 (finding F1) — also clears the durable recovery record. This is
+   * the ONLY removal path: unmounts, refreshes, and route changes preserve the
+   * record. If the wallet scope is unavailable the record is preserved and the
+   * guard will restore again on the next visit for that account.
    */
   const handleAcknowledgeUnknownOutcome = useCallback(() => {
     setUnresolvedUnknown(null);
     deployInFlightRef.current = false;
+    clearDeploymentRecoveryRecord(createBrowserStorage(), {
+      account: walletAddress,
+      chainId: network.chainId,
+      contractAddress: resolveArcFlowContractAddress(network),
+    });
     setShowReview(false);
     setCurrentStep("action");
     setDeployment({ phase: "idle" });
-  }, []);
+  }, [walletAddress, network]);
+
+  /**
+   * Phase 48.4 (finding F1) — restore a persisted unknown-outcome record when
+   * the wallet scope becomes known (mount, wallet connect, or scope change).
+   * Restoring blocks deployment until the user reconciles the transaction or
+   * explicitly acknowledges the risk. Fail-safe rules:
+   *  - a storage/validation failure never clears an in-session block;
+   *  - records for a different account/chain/contract never restore here and
+   *    are never deleted (they belong to another journey);
+   *  - an in-flight or completed deployment is never overwritten.
+   */
+  const restoredScopeRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!walletAddress) return;
+    const contractAddress = resolveArcFlowContractAddress(network);
+    const signature = `${walletAddress.toLowerCase()}|${network.chainId}|${contractAddress ?? "unconfigured"}`;
+    if (restoredScopeRef.current === signature) return;
+    restoredScopeRef.current = signature;
+
+    const outcome = loadDeploymentRecoveryRecord(
+      createBrowserStorage(),
+      { account: walletAddress, chainId: network.chainId, contractAddress },
+    );
+    if (outcome.status !== "restored") return;
+    const record = outcome.record;
+
+    setUnresolvedUnknown({ transactionHash: record.transactionHash, phase: record.phase });
+    setDeployment((prev) =>
+      prev.phase === "idle"
+        ? {
+            phase: "error",
+            failedPhase: record.phase,
+            outcomeUnknown: true,
+            uncertainTxHash: record.transactionHash,
+            flowId: record.flowId !== null ? BigInt(record.flowId) : undefined,
+            error: RESTORED_UNKNOWN_OUTCOME_ERROR,
+          }
+        : prev,
+    );
+  }, [walletAddress, network]);
 
   const handleDeploy = useCallback(async () => {
     // Phase 48.1 — synchronous gate evaluated before any await: a double-click
@@ -188,6 +243,7 @@ export function FlowBuilder({ initialFlow }: FlowBuilderProps) {
 
     deployInFlightRef.current = true;
     journeyPhaseRef.current = "create";
+    journeyFlowIdRef.current = null;
     setDeployment({ phase: "create" });
 
     try {
@@ -199,6 +255,7 @@ export function FlowBuilder({ initialFlow }: FlowBuilderProps) {
           // Track the phase synchronously so a rejection right after a patch
           // still attributes partial completion to the correct step.
           journeyPhaseRef.current = (progress.phase as DeployStepKey) ?? journeyPhaseRef.current;
+          if (progress.flowId !== undefined) journeyFlowIdRef.current = progress.flowId;
           setDeployment((prev) => applyDeploymentProgress(prev, progress));
         },
       });
@@ -215,15 +272,27 @@ export function FlowBuilder({ initialFlow }: FlowBuilderProps) {
       }));
       if (outcomeUnknown) {
         // Retain the submitted hash and block a blind restart of this journey.
-        setUnresolvedUnknown({
+        const unresolved: UnresolvedDeployment = {
           transactionHash: error.transactionHash,
           phase: failedPhase ?? "execute",
+        };
+        setUnresolvedUnknown(unresolved);
+        // Phase 48.4 (finding F1) — persist the evidence so a refresh or
+        // navigation cannot clear the guard. Persistence failure is fail-safe:
+        // the in-memory guard above still blocks this session.
+        saveDeploymentRecoveryRecord(createBrowserStorage(), {
+          account: walletAddress,
+          chainId: network.chainId,
+          contractAddress: getArcFlowContractAddress(network),
+          transactionHash: error.transactionHash,
+          phase: unresolved.phase,
+          flowId: journeyFlowIdRef.current,
         });
       }
     } finally {
       deployInFlightRef.current = false;
     }
-  }, [canDeploy, sendTransaction, network, flow, unresolvedUnknown]);
+  }, [canDeploy, sendTransaction, network, flow, unresolvedUnknown, walletAddress]);
 
   const isStepCompleted = (step: Step) => {
     const index = stepOrder.indexOf(step);
@@ -702,7 +771,7 @@ function DeploymentScreen({
           </div>
 
           {isError && deployment.outcomeUnknown && (
-            <div className="rounded-lg border border-warning bg-warning/10 p-4 text-sm text-warning">
+            <div role="alert" className="rounded-lg border border-warning bg-warning/10 p-4 text-sm text-warning">
               <div className="mb-1 flex items-center gap-2">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
                   <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
@@ -712,10 +781,8 @@ function DeploymentScreen({
                 <span className="font-semibold">Confirmation unknown</span>
               </div>
               <p className="ml-6">
-                The transaction submitted during {failedPhaseLabel ?? "this step"} was sent but its result could not be confirmed. It may still
-                confirm on Arc — this is not a confirmed failure. Check the explorer below before
-                retrying, and do not resubmit blindly. Starting a new deployment is blocked until you
-                acknowledge this risk.
+                The transaction submitted during {failedPhaseLabel ?? "this step"} is unresolved.{" "}
+                {UNKNOWN_OUTCOME_DISCLOSURE}
               </p>
               {deployment.uncertainTxHash && (
                 <p className="ml-6 mt-2">
@@ -734,7 +801,7 @@ function DeploymentScreen({
           )}
 
           {isError && !deployment.outcomeUnknown && (
-            <div className="rounded-lg border border-destructive bg-destructive/10 p-4 text-sm text-destructive">
+            <div role="alert" className="rounded-lg border border-destructive bg-destructive/10 p-4 text-sm text-destructive">
               <div className="mb-1 flex items-center gap-2">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
                   <circle cx={12} cy={12} r={10} />
