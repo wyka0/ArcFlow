@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useCallback, useEffect, useMemo, useState, useRef } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { motion } from "framer-motion";
 import { Card, CardBody } from "@/components/card";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,7 @@ import { TriggerStep } from "./trigger-step";
 import { ConditionStep } from "./condition-step";
 import { ActionStep } from "./action-step";
 import { FlowPreviewCard } from "./flow-preview";
-import { StepHeader } from "./step-indicator";
+import { StepConnector, StepHeader } from "./step-indicator";
 import { deployFlow, canBeginDeployment, applyDeploymentProgress, DEPLOYMENT_DISCLOSURE_STEPS, EXECUTION_AMOUNT_DISCLOSURE, UNKNOWN_OUTCOME_DISCLOSURE, RESTORED_UNKNOWN_OUTCOME_ERROR, type DeployStepKey, type UnresolvedDeployment } from "@/lib/arcflow/deploy-flow";
 import { saveDeploymentRecoveryRecord, loadDeploymentRecoveryRecord, clearDeploymentRecoveryRecord } from "@/lib/arcflow/deployment-recovery";
 import { createBrowserStorage } from "@/lib/payments/storage";
@@ -21,6 +21,32 @@ import { UnknownTransactionOutcomeError } from "@/lib/arcflow/send-transaction";
 import { getActiveArcNetwork } from "@/lib/arc/network";
 
 type Step = "trigger" | "condition" | "action" | "review" | "deploying";
+
+const STEP_LABELS: Record<Step, string> = {
+  trigger: "Trigger",
+  condition: "Condition",
+  action: "Action",
+  review: "Review",
+  deploying: "Deploying",
+};
+
+// Presentation-only copy for the editor panel header. The workflow behavior,
+// validation, and on-chain steps are unaffected by these labels.
+const BUILDER_STEP_META = {
+  trigger: {
+    label: "Trigger",
+    description: "Records the payment event this workflow is configured for.",
+  },
+  condition: {
+    label: "Condition",
+    description: "Set the exact USDC amount this workflow will split in one manual run.",
+  },
+  action: {
+    label: "Action",
+    description: "Split the payment between recipients by percentage.",
+  },
+} as const;
+
 
 interface DeploymentState {
   phase: "idle" | "create" | "activate" | "approve" | "execute" | "complete" | "error";
@@ -328,55 +354,65 @@ export function FlowBuilder({ initialFlow }: FlowBuilderProps) {
   const nameErrors = touched.name ? errors.filter((e) => e.field === "name").map((e) => e.message) : [];
   const nameError = nameErrors[0];
 
+  const currentStepMeta =
+    currentStep === "condition" || currentStep === "action"
+      ? BUILDER_STEP_META[currentStep]
+      : BUILDER_STEP_META.trigger;
+
   return (
     <div className="w-full">
       {/* Flow name — always visible so it can be set or corrected from any step.
           It does not block step progression (documented in STEP_FIELD_PREFIXES,
           types/flow.ts) but both review actions enforce it via validateAll. */}
-      <div className="mb-6">
-        <label htmlFor="flow-name" className="mb-1.5 block text-xs font-mono tracking-[0.1em] uppercase text-muted-foreground">
-          Flow name
-        </label>
-        <input
-          id="flow-name"
-          type="text"
-          value={flow.name ?? ""}
-          onChange={(e) => handleNameChange(e.target.value)}
-          onBlur={() => handleBlur("name")}
-          placeholder="e.g. Treasury revenue split"
-          className={`w-full rounded-md border bg-card px-3 py-2 text-sm text-foreground transition-colors ${
-            nameError ? "border-destructive focus:border-destructive" : "border-border focus:border-accent"
-          }`}
-          aria-invalid={!!nameError}
-          aria-describedby={nameError ? "flow-name-error" : undefined}
-        />
-        {nameError && (
-          <p id="flow-name-error" className="mt-1 text-xs text-destructive font-mono" role="alert">
-            {nameError}
-          </p>
-        )}
+      <div className="mb-4">
+        <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
+          <label htmlFor="flow-name" className="shrink-0 text-xs font-mono tracking-[0.1em] uppercase text-muted-foreground sm:w-28">
+            Flow name
+          </label>
+          <div className="min-w-0 flex-1">
+            <input
+              id="flow-name"
+              type="text"
+              value={flow.name ?? ""}
+              onChange={(e) => handleNameChange(e.target.value)}
+              onBlur={() => handleBlur("name")}
+              placeholder="e.g. Treasury revenue split"
+              className={`w-full rounded-md border bg-card px-3 py-2 text-sm text-foreground transition-colors ${
+                nameError ? "border-destructive focus:border-destructive" : "border-border focus:border-accent"
+              }`}
+              aria-invalid={!!nameError}
+              aria-describedby={nameError ? "flow-name-error" : undefined}
+            />
+            {nameError && (
+              <p id="flow-name-error" className="mt-1 text-xs text-destructive font-mono" role="alert">
+                {nameError}
+              </p>
+            )}
+          </div>
+        </div>
       </div>
 
-      {/* Step Indicator */}
-      <div className="flex items-center gap-2 mb-6 lg:mb-8" role="navigation" aria-label="Flow builder steps">
-        {stepOrder.map((step, index) => {
-          const labels: Record<Step, string> = { trigger: "Trigger", condition: "Condition", action: "Action", review: "Review", deploying: "Deploying" };
-          const isLast = index === stepOrder.length - 1;
-          return (
+      {/* Step navigation — one aligned strip with consistent circles, labels,
+          and connectors; descriptions live in the editor panel header. */}
+      <div
+        className="mb-5 flex items-center gap-2 rounded-lg border border-border bg-card px-3.5 py-3 sm:gap-3 sm:px-4"
+        role="navigation"
+        aria-label="Flow builder steps"
+      >
+        {stepOrder.map((step, index) => (
+          <Fragment key={step}>
+            {index > 0 ? <StepConnector completed={index - 1 < currentStepIndex} /> : null}
             <StepHeader
-              key={step}
               number={index + 1}
-              label={labels[step]}
-              description="Configure your flow step"
+              label={STEP_LABELS[step]}
               active={isStepActive(step)}
               completed={isStepCompleted(step)}
-              isLast={index === stepOrder.length - 1}
             />
-          );
-        })}
+          </Fragment>
+        ))}
       </div>
 
-      <div className="grid lg:grid-cols-12 gap-6">
+      <div className="grid items-start gap-5 lg:grid-cols-12 lg:gap-6">
         {/* Builder */}
         <motion.div
           className="lg:col-span-7"
@@ -403,52 +439,61 @@ export function FlowBuilder({ initialFlow }: FlowBuilderProps) {
               isSending={isSending}
             />
           ) : (
-            <>
-              {currentStep === "trigger" && (
-                <TriggerStep
-                  active={isStepActive("trigger")}
-                  completed={isStepCompleted("trigger")}
-                />
-              )}
-              {currentStep === "condition" && (
-                <ConditionStep
-                  condition={flow.condition || { operator: "GTE", amount: "10.00" }}
-                  onChange={handleConditionChange}
-                  onBlur={() => handleBlur("condition")}
-                  active={isStepActive("condition")}
-                  completed={isStepCompleted("condition")}
-                  errors={touched.condition ? errors.filter((e) => e.field.startsWith("condition")).map((e) => e.message) : []}
-                />
-              )}
-              {currentStep === "action" && (
-                <ActionStep
-                  actions={flow.actions || []}
-                  onChange={handleActionChange}
-                  onBlur={() => handleBlur("action")}
-                  active={isStepActive("action")}
-                  completed={isStepCompleted("action")}
-                  errors={touched.action ? errors.filter((e) => e.field.startsWith("action")).map((e) => e.message) : []}
-                />
-              )}
+            <Card className="overflow-hidden">
+              <div className="border-b border-border px-5 py-4 lg:px-6">
+                <p className="text-[11px] font-mono uppercase tracking-[0.1em] text-muted-foreground">
+                  Step {currentStepIndex + 1} of {stepOrder.length}
+                </p>
+                <h2 className="mt-1 text-base font-semibold text-foreground">{currentStepMeta.label}</h2>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{currentStepMeta.description}</p>
+              </div>
+              <CardBody>
+                {currentStep === "trigger" && (
+                  <TriggerStep
+                    active={isStepActive("trigger")}
+                    completed={isStepCompleted("trigger")}
+                  />
+                )}
+                {currentStep === "condition" && (
+                  <ConditionStep
+                    condition={flow.condition || { operator: "GTE", amount: "10.00" }}
+                    onChange={handleConditionChange}
+                    onBlur={() => handleBlur("condition")}
+                    active={isStepActive("condition")}
+                    completed={isStepCompleted("condition")}
+                    errors={touched.condition ? errors.filter((e) => e.field.startsWith("condition")).map((e) => e.message) : []}
+                  />
+                )}
+                {currentStep === "action" && (
+                  <ActionStep
+                    actions={flow.actions || []}
+                    onChange={handleActionChange}
+                    onBlur={() => handleBlur("action")}
+                    active={isStepActive("action")}
+                    completed={isStepCompleted("action")}
+                    errors={touched.action ? errors.filter((e) => e.field.startsWith("action")).map((e) => e.message) : []}
+                  />
+                )}
 
-              {/* Step validation errors */}
-              {touched[currentStep] && (() => {
-                const stepErrs = validateStep(flow, currentStep);
-                if (stepErrs.length === 0) return null;
-                return (
-                  <div className="mt-4 rounded-lg border border-destructive bg-destructive/10 p-3 text-xs text-destructive">
-                    <span className="font-semibold">Please fix the following:</span>
-                    <ul className="mt-1 ml-4 list-disc">
-                      {stepErrs.map((e, i) => (
-                        <li key={i}>{e.message}</li>
-                      ))}
-                    </ul>
-                  </div>
-                );
-              })()}
+                {/* Step validation errors */}
+                {touched[currentStep] && (() => {
+                  const stepErrs = validateStep(flow, currentStep);
+                  if (stepErrs.length === 0) return null;
+                  return (
+                    <div className="mt-4 rounded-lg border border-destructive bg-destructive/10 p-3 text-xs text-destructive">
+                      <span className="font-semibold">Please fix the following:</span>
+                      <ul className="mt-1 ml-4 list-disc">
+                        {stepErrs.map((e, i) => (
+                          <li key={i}>{e.message}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  );
+                })()}
+              </CardBody>
 
-              {/* Navigation */}
-              <div className="mt-8 flex items-center justify-between pt-6 border-t border-border">
+              {/* Footer navigation — aligned within the editor panel */}
+              <div className="flex items-center justify-between border-t border-border px-5 py-3.5 lg:px-6">
                 <Button
                   variant="ghost"
                   onClick={handleBack}
@@ -468,7 +513,7 @@ export function FlowBuilder({ initialFlow }: FlowBuilderProps) {
                   </svg>
                 </Button>
               </div>
-            </>
+            </Card>
           )}
         </motion.div>
 
@@ -487,7 +532,7 @@ export function FlowBuilder({ initialFlow }: FlowBuilderProps) {
 
       {/* Mobile Preview */}
       <motion.div
-        className="lg:hidden mt-6"
+        className="mt-5 lg:hidden"
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, delay: 0.2, ease: [0.22, 1, 0.36, 1] }}
@@ -497,7 +542,7 @@ export function FlowBuilder({ initialFlow }: FlowBuilderProps) {
 
       {/* Mobile Deploy Button */}
       <motion.div
-        className="lg:hidden mt-6"
+        className="mt-5 lg:hidden"
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, delay: 0.3, ease: [0.22, 1, 0.36, 1] }}

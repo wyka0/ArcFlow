@@ -9,17 +9,17 @@ interface StepNumberProps {
 export function StepNumber({ number, active = false, completed = false }: StepNumberProps) {
   return (
     <div
-      className={`flex items-center justify-center w-10 h-10 rounded-full font-semibold text-sm transition-all duration-200 ${
-        completed
-          ? "bg-success text-success-foreground"
-          : active
+      className={`flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold transition-colors duration-200 sm:size-8 ${
+        active
           ? "bg-primary text-primary-foreground"
-          : "bg-muted text-muted-foreground border border-border"
+          : completed
+          ? "bg-success text-success-foreground"
+          : "border border-border bg-muted text-muted-foreground"
       }`}
       aria-hidden="true"
     >
-      {completed ? (
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round">
+      {completed && !active ? (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round">
           <polyline points="20 6 9 17 4 12" />
         </svg>
       ) : (
@@ -37,7 +37,7 @@ interface StepConnectorProps {
 export function StepConnector({ active = false, completed = false }: StepConnectorProps) {
   return (
     <div
-      className={`flex-1 h-px transition-colors duration-200 ${
+      className={`h-px min-w-3 flex-1 transition-colors duration-200 ${
         completed ? "bg-success" : active ? "bg-primary" : "bg-border"
       }`}
       aria-hidden="true"
@@ -48,36 +48,29 @@ export function StepConnector({ active = false, completed = false }: StepConnect
 interface StepHeaderProps {
   number: number;
   label: string;
-  description: string;
   active?: boolean;
   completed?: boolean;
-  isLast?: boolean;
 }
 
-export function StepHeader({ number, label, description, active = false, completed = false, isLast = false }: StepHeaderProps) {
+/*
+ * Step navigation item — a compact circle + label unit designed to sit inline
+ * with StepConnector inside a single stepper strip. The per-step description
+ * lives in the editor panel header, so the navigation stays one consistent row.
+ */
+export function StepHeader({ number, label, active = false, completed = false }: StepHeaderProps) {
   return (
-    <div className="flex items-center flex-1 relative">
-      <div className="relative flex items-center">
-        <div className="flex flex-col items-center gap-2 flex-shrink-0">
-          <StepNumber number={number} active={active} completed={completed} />
-          {!isLast && (
-            <div
-              className={`w-full h-px transition-colors duration-200 ${
-                completed ? "bg-success" : active ? "bg-primary" : "bg-border"
-              }`}
-              aria-hidden="true"
-            />
-          )}
-        </div>
-      </div>
-      <div className="flex-1 min-w-0 pt-1 pl-2">
-        <h3 className={`text-sm font-semibold transition-colors ${
-          completed ? "text-success" : active ? "text-foreground" : "text-muted-foreground"
-        }`}>
-          {label}
-        </h3>
-        <p className="mt-1 text-xs text-muted-foreground">{description}</p>
-      </div>
+    <div
+      className="flex min-w-0 items-center gap-2"
+      aria-current={active ? "step" : undefined}
+    >
+      <StepNumber number={number} active={active} completed={completed} />
+      <span
+        className={`truncate text-xs font-medium transition-colors sm:text-sm ${
+          active ? "text-foreground" : completed ? "text-success" : "text-muted-foreground"
+        }`}
+      >
+        {label}
+      </span>
     </div>
   );
 }

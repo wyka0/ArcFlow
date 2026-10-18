@@ -1,8 +1,6 @@
 ﻿"use client";
 
 import { useCallback, type ChangeEvent, type FocusEvent } from "react";
-import { Card, CardBody } from "@/components/card";
-import { StepHeader } from "./step-indicator";
 import { Button } from "@/components/ui/button";
 import type { FlowAction, Address } from "@/types/flow";
 import { isValidAddress } from "@/types/flow";
@@ -16,7 +14,7 @@ interface ActionStepProps {
   errors?: string[];
 }
 
-export function ActionStep({ actions, onChange, onBlur, active, completed, errors = [] }: ActionStepProps) {
+export function ActionStep({ actions, onChange, onBlur, active, errors = [] }: ActionStepProps) {
   const totalPercentage = actions.reduce((sum, a) => sum + a.percentage, 0);
   const isValidTotal = totalPercentage === 100;
   const hasError = errors.length > 0;
@@ -91,17 +89,8 @@ export function ActionStep({ actions, onChange, onBlur, active, completed, error
   });
 
   return (
-    <Card variant="default" className="w-full">
-      <CardBody>
-        <StepHeader
-          number={3}
-          label="ACTION"
-          description="Split the payment between recipients by percentage."
-          active={active}
-          completed={completed}
-        />
-        <div className="mt-6 space-y-4">
-          <div className="flex items-center justify-between">
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
             <h4 className="text-xs font-medium text-muted-foreground">Recipients</h4>
             <Button
               type="button"
@@ -229,7 +218,5 @@ export function ActionStep({ actions, onChange, onBlur, active, completed, error
             </div>
           )}
         </div>
-      </CardBody>
-    </Card>
   );
 }

@@ -1,8 +1,6 @@
 ﻿"use client";
 
 import { useCallback, useRef, type ChangeEvent, type FocusEvent } from "react";
-import { Card, CardBody } from "@/components/card";
-import { StepHeader } from "./step-indicator";
 import type { FlowCondition } from "@/types/flow";
 
 interface ConditionStepProps {
@@ -18,7 +16,7 @@ const OPERATORS = [
   { value: "GTE" as const, label: "≥", description: "Greater than or equal" },
 ] as const;
 
-export function ConditionStep({ condition, onChange, onBlur, active, completed, errors = [] }: ConditionStepProps) {
+export function ConditionStep({ condition, onChange, onBlur, active, errors = [] }: ConditionStepProps) {
   const amountInputRef = useRef<HTMLInputElement>(null);
   const hasError = errors.length > 0;
 
@@ -52,16 +50,7 @@ export function ConditionStep({ condition, onChange, onBlur, active, completed, 
   );
 
   return (
-    <Card variant="default" className="w-full">
-      <CardBody>
-        <StepHeader
-          number={2}
-          label="CONDITION"
-          description="Set the exact USDC amount this workflow will split in one manual run."
-          active={active}
-          completed={completed}
-        />
-        <div className="mt-6 space-y-4">
+    <div className="space-y-4">
           <div>
             <label htmlFor="condition-operator" className="mb-2 block text-xs font-medium text-muted-foreground">
               Operator
@@ -131,7 +120,5 @@ export function ConditionStep({ condition, onChange, onBlur, active, completed, 
             </div>
           )}
         </div>
-      </CardBody>
-    </Card>
   );
 }
