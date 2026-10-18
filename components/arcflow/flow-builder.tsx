@@ -79,10 +79,15 @@ export function FlowBuilder({ initialFlow }: FlowBuilderProps) {
   const isWrongNetwork = connection === "wrong-network";
   const contractConfigured = useMemo(() => isArcFlowConfigured(network), [network]);
 
-  const canDeploy = useMemo(
-    () => contractConfigured && isWalletConnected && !isWrongNetwork && !!walletAddress && validateAll(),
-    [contractConfigured, isWalletConnected, isWrongNetwork, walletAddress, errors, flow],
-  );
+  // Phase 49B.11.8 — pure derivation. The previous useMemo factory called
+  // validateAll() during render (setErrors/setTouched inside the render pass),
+  // which re-invoked the component and crashed with a TDZ ReferenceError
+  // ("Cannot access '$' before initialization") on the connected Arc Mainnet
+  // path — the only path where the full conjunction holds. Deploy eligibility
+  // is now derived from the maintained validation state; the authoritative
+  // full-form validation runs in the review/deploy event handlers.
+  const canDeploy =
+    contractConfigured && isWalletConnected && !isWrongNetwork && !!walletAddress && errors.length === 0;
 
   const updateFlow = useCallback(<K extends keyof Partial<Flow>>(key: K, value: Partial<Flow>[K]) => {
     setFlow((prev) => ({ ...prev, [key]: value }));
@@ -239,6 +244,10 @@ export function FlowBuilder({ initialFlow }: FlowBuilderProps) {
     });
     if (!gate.ok) return;
     if (!canDeploy) return;
+    // Phase 49B.11.8 — authoritative fresh full-form validation at deploy
+    // time (event handler, so the state updates here are legal): a pure
+    // render-time gate must never let invalid fields bypass validation.
+    if (!validateAll()) return;
     if (!isArcFlowConfigured(network)) return;
 
     deployInFlightRef.current = true;
