@@ -197,7 +197,10 @@ export default function ActivityPage() {
       <Card>
         <CardBody className="p-5 lg:p-6">
           {records.length === 0 ? (
-            <Empty>
+            // Phase 49B.11.12 — compact, content-proportional empty state: the
+            // dashed panel sits evenly inset inside the parent card without the
+            // oversized default vertical padding.
+            <Empty compact>
               <EmptyIcon>
                 <History className="size-6" />
               </EmptyIcon>

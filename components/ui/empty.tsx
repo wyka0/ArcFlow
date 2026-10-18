@@ -5,9 +5,18 @@ import type { ReactNode } from "react";
  * Renders a centered icon, title, description, and optional action.
  */
 
-export function Empty({ children, className = "" }: { children: ReactNode; className?: string }) {
+export function Empty({
+  children,
+  className = "",
+  compact = false,
+}: {
+  children: ReactNode;
+  className?: string;
+  /** Reduced vertical padding for a compact, content-proportional panel. */
+  compact?: boolean;
+}) {
   return (
-    <div className={`flex min-w-0 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-card/50 px-6 py-10 text-center sm:py-14 ${className}`}>
+    <div className={`flex min-w-0 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-card/50 px-6 text-center ${compact ? "py-8 sm:py-10" : "py-10 sm:py-14"} ${className}`}>
       {children}
     </div>
   );
