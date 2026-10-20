@@ -171,6 +171,7 @@ export const POLICIES = {
   PAYMENT_INTENT: { name: "PAYMENT_INTENT", max: 30, windowMs: 60_000 },
   PAYMENT_VERIFY: { name: "PAYMENT_VERIFY", max: 30, windowMs: 60_000 },
   PAYMENT_HISTORY: { name: "PAYMENT_HISTORY", max: 60, windowMs: 60_000 },
+  FLOW_EXECUTION_VERIFY: { name: "FLOW_EXECUTION_VERIFY", max: 30, windowMs: 60_000 },
   SERVICE_REQUEST: { name: "SERVICE_REQUEST", max: 30, windowMs: 60_000 },
   SERVICE_FULFILL: { name: "SERVICE_FULFILL", max: 20, windowMs: 60_000 },
   SERVICE_RESULT: { name: "SERVICE_RESULT", max: 60, windowMs: 60_000 },

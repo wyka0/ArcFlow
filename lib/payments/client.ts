@@ -1,5 +1,5 @@
 import type { SpendingSummary } from "@/lib/agent/policy";
-import type { EvmAddress, TrustedPayment } from "@/types";
+import type { EvmAddress, FlowExecutionRecord, TrustedPayment } from "@/types";
 
 /**
  * Browser-side client for the trusted ledger API.
@@ -18,6 +18,7 @@ export interface LedgerPersistence {
 
 export interface TrustedHistoryPayload {
   records: TrustedPayment[];
+  flowExecutions: FlowExecutionRecord[];
   spending: SpendingSummary;
   persistence: LedgerPersistence;
 }
@@ -53,12 +54,19 @@ export async function fetchTrustedHistory(): Promise<LedgerResult<TrustedHistory
     const body = (await response.json()) as {
       ok: true;
       records: TrustedPayment[];
+      /** Additive: absent from older server responses. */
+      flowExecutions?: FlowExecutionRecord[];
       spending: SpendingSummary;
       persistence: LedgerPersistence;
     };
     return {
       ok: true,
-      data: { records: body.records, spending: body.spending, persistence: body.persistence },
+      data: {
+        records: body.records,
+        flowExecutions: body.flowExecutions ?? [],
+        spending: body.spending,
+        persistence: body.persistence,
+      },
     };
   } catch {
     return {
@@ -149,6 +157,48 @@ export async function verifyTrustedTransaction(input: {
       ok: false,
       code: "LEDGER_UNAVAILABLE",
       message: "The transaction could not be verified against the trusted ledger.",
+    };
+  }
+}
+
+export interface FlowExecutionVerifyPayload {
+  record: FlowExecutionRecord;
+  alreadyRecorded: boolean;
+}
+
+/**
+ * Verify and record an ArcFlow `executeSplit` transaction.
+ *
+ * The server derives the flow, owner, amounts, and recipients independently
+ * from the receipt and the contract's on-chain state — the client supplies
+ * only the hash. Recording failures never block the on-chain journey, so
+ * callers may treat this as best-effort.
+ */
+export async function verifyFlowExecution(input: {
+  txHash: string;
+}): Promise<LedgerResult<FlowExecutionVerifyPayload>> {
+  try {
+    const response = await fetch("/api/payments/flow-executions/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ txHash: input.txHash }),
+    });
+
+    const body = (await response.json()) as
+      | { ok: true; record: FlowExecutionRecord; alreadyRecorded: boolean }
+      | ApiErrorBody;
+
+    if (!response.ok || !body.ok) {
+      const error = "error" in body ? body.error : { code: "REQUEST_FAILED", message: "Verify failed." };
+      return { ok: false, code: error.code, message: error.message };
+    }
+
+    return { ok: true, data: { record: body.record, alreadyRecorded: body.alreadyRecorded } };
+  } catch {
+    return {
+      ok: false,
+      code: "LEDGER_UNAVAILABLE",
+      message: "The flow execution could not be verified against the trusted ledger.",
     };
   }
 }

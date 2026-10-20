@@ -19,6 +19,7 @@ import { saveDeploymentRecoveryRecord, loadDeploymentRecoveryRecord, clearDeploy
 import { createBrowserStorage } from "@/lib/payments/storage";
 import { UnknownTransactionOutcomeError } from "@/lib/arcflow/send-transaction";
 import { getActiveArcNetwork } from "@/lib/arc/network";
+import { verifyFlowExecution } from "@/lib/payments/client";
 
 type Step = "trigger" | "condition" | "action" | "review" | "deploying";
 
@@ -282,7 +283,7 @@ export function FlowBuilder({ initialFlow }: FlowBuilderProps) {
     setDeployment({ phase: "create" });
 
     try {
-      await deployFlow({
+      const result = await deployFlow({
         flow,
         network,
         sendTransaction,
@@ -294,6 +295,13 @@ export function FlowBuilder({ initialFlow }: FlowBuilderProps) {
           setDeployment((prev) => applyDeploymentProgress(prev, progress));
         },
       });
+
+      // Phase 49B.12.3 — best-effort Activity recording. The on-chain journey
+      // is already complete; a recording failure is intentionally not surfaced
+      // (the hash stays verifiable from Activity) and can never turn a
+      // confirmed execution into a failed state, block the success flow, or
+      // trigger another transaction. No local record is written on failure.
+      void verifyFlowExecution({ txHash: result.executeTxHash }).catch(() => {});
     } catch (error) {
       const outcomeUnknown = error instanceof UnknownTransactionOutcomeError;
       const failedPhase = journeyPhaseRef.current ?? undefined;

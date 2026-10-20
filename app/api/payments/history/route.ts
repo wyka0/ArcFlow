@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 
 import { requireAuthenticatedSession } from "@/lib/auth";
-import { TrustedLedgerUnavailableError, getTrustedHistory } from "@/lib/payments/server/service";
+import {
+  TrustedLedgerUnavailableError,
+  getTrustedFlowExecutions,
+  getTrustedHistory,
+} from "@/lib/payments/server/service";
 import { getTrustedRepository } from "@/lib/payments/server/factory";
 import { applySecurityHeaders, guardReadRequest } from "@/lib/security";
 
@@ -39,11 +43,15 @@ export async function GET(request: Request): Promise<NextResponse> {
     const { records, spending } = await getTrustedHistory({
       ownerWalletAddress: auth.session.walletAddress,
     });
+    const flowExecutions = await getTrustedFlowExecutions({
+      ownerWalletAddress: auth.session.walletAddress,
+    });
     const repository = await getTrustedRepository();
 
     const response = NextResponse.json({
       ok: true,
       records,
+      flowExecutions,
       spending,
       persistence: repository.persistence,
     });

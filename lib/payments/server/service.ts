@@ -5,15 +5,23 @@ import {
   type PolicyViolation,
   type SpendingSummary,
 } from "@/lib/agent/policy";
+import { isArcFlowConfigured, getArcFlowContractAddress } from "@/lib/arcflow/contract";
 import { DEMO_SPENDING_POLICY } from "@/lib/demo/agent";
 import { evaluatePaymentGate } from "@/lib/payments/gate";
-import { createPaymentId } from "@/lib/payments/id";
+import { createFlowExecutionId, createPaymentId } from "@/lib/payments/id";
 import { getService } from "@/lib/services/registry";
-import type { EvmAddress, PaymentIntent, TrustedPayment } from "@/types";
+import type { EvmAddress, FlowExecutionRecord, PaymentIntent, TrustedPayment } from "@/types";
+import { usdcTokenAmountFromBaseUnits } from "@/types/flow-execution";
 
-import { createArcChainReader, type ArcChainReader } from "./chain";
+import {
+  createArcChainReader,
+  createArcFlowChainReader,
+  type ArcChainReader,
+  type ArcFlowChainReader,
+} from "./chain";
 import { INTENT_TTL_MS, resolveServerRecipient } from "./config";
 import { getTrustedRepository } from "./factory";
+import { decodeFlowExecuted, verifyFlowExecutionReceipt } from "./flow-execution-verify";
 import type { TrustedPaymentRepository } from "./repository";
 import { verifyUsdcPayment } from "./verify";
 import {
@@ -363,5 +371,197 @@ export async function getTrustedSpending(): Promise<SpendingSummary> {
   return withLedger(async ({ repository }) => {
     const records = await repository.listPayments();
     return buildSpendingSummaryTrusted(DEMO_SPENDING_POLICY, records, new Date());
+  });
+}
+
+export type FlowExecutionVerifyOutcome =
+  | { status: "verified"; record: FlowExecutionRecord; alreadyRecorded: boolean }
+  | { status: "rejected"; reason: string; message: string };
+
+/**
+ * Verify an ArcFlow `executeSplit` transaction against Arc and, only on
+ * success, record it as a flow execution.
+ *
+ * The client supplies only `txHash`. The flow id comes from the receipt's
+ * `FlowExecuted` event, the expected configuration comes from the contract's
+ * on-chain state, and the amounts and recipients come from the verified
+ * transfer set. Flow executions are always wallet-owned: a session is
+ * mandatory, and the session wallet must be the flow owner.
+ *
+ * The supplied hash is canonicalised to lowercase before any lookup, chain
+ * read, verification, or persistence, so the same transaction submitted in
+ * different letter case resolves to a single record.
+ *
+ * An optional `chain` reader may be supplied for tests; otherwise the default
+ * ArcFlow reader is used.
+ */
+export async function verifyFlowExecution(input: {
+  txHash: `0x${string}`;
+  authenticatedWallet?: EvmAddress | null;
+  chain?: ArcFlowChainReader;
+}): Promise<FlowExecutionVerifyOutcome> {
+  return withLedger(async ({ repository }) => {
+    // Canonicalise once: repository lookups, the chain reader, the pure
+    // verifier, and the stored record all use the lowercase hash.
+    const txHash = input.txHash.toLowerCase() as `0x${string}`;
+
+    // Flow executions are always wallet-owned: a session is mandatory.
+    if (!input.authenticatedWallet) {
+      return {
+        status: "rejected",
+        reason: "UNAUTHENTICATED",
+        message: "Sign in to verify a flow execution.",
+      };
+    }
+    const sessionWallet = input.authenticatedWallet;
+
+    // Idempotency first: a known hash returns the existing record — but only
+    // to the wallet that owns it.
+    const existing = await repository.findFlowExecutionByTxHash(txHash);
+    if (existing) {
+      if (existing.ownerWalletAddress.toLowerCase() !== sessionWallet.toLowerCase()) {
+        return {
+          status: "rejected",
+          reason: "FORBIDDEN",
+          message: "You are not authorised to verify this flow execution.",
+        };
+      }
+      return { status: "verified", record: existing, alreadyRecorded: true };
+    }
+
+    const network = getActiveArcNetwork();
+    if (!isArcFlowConfigured(network)) {
+      return {
+        status: "rejected",
+        reason: "CONFIGURATION_ERROR",
+        message: "The ArcFlow contract is not configured, so executions cannot be verified.",
+      };
+    }
+    const contractAddress = getArcFlowContractAddress(network);
+
+    const reader = input.chain ?? createArcFlowChainReader(network);
+    const observedChainId = await reader.getChainId();
+    const receipt = await reader.getTransactionReceipt(txHash);
+    if (!receipt) {
+      return {
+        status: "rejected",
+        reason: "RECEIPT_NOT_FOUND",
+        message: "No Arc receipt exists for this transaction hash.",
+      };
+    }
+
+    const event = decodeFlowExecuted(receipt.logs, contractAddress);
+    if (!event) {
+      return {
+        status: "rejected",
+        reason: "NOT_FLOW_EXECUTION",
+        message: "The transaction is not a single ArcFlow execution from the configured contract.",
+      };
+    }
+
+    const flowResult = await reader.readFlow(event.flowId);
+    if (flowResult.status === "not_found") {
+      return {
+        status: "rejected",
+        reason: "FLOW_NOT_FOUND",
+        message: "The executed flow was not found on-chain.",
+      };
+    }
+    if (flowResult.status === "unavailable") {
+      return {
+        status: "rejected",
+        reason: "CHAIN_UNAVAILABLE",
+        message: "The flow configuration could not be read from Arc.",
+      };
+    }
+    const flow = flowResult.flow;
+
+    // The on-chain owner is authoritative: only that wallet may record this
+    // execution. (The pure verifier below also requires the transaction sender
+    // to be the owner, matching the contract's owner-only rule.)
+    if (flow.owner.toLowerCase() !== sessionWallet.toLowerCase()) {
+      return {
+        status: "rejected",
+        reason: "FORBIDDEN",
+        message: "You are not the owner of this flow.",
+      };
+    }
+
+    const verification = verifyFlowExecutionReceipt({
+      transactionHash: txHash,
+      network,
+      contractAddress,
+      expected: {
+        flowId: event.flowId,
+        owner: flow.owner,
+        treasury: flow.treasury,
+        contributor: flow.contributor,
+        treasuryBps: flow.treasuryBps,
+        contributorBps: flow.contributorBps,
+      },
+      receipt,
+      observedChainId,
+    });
+
+    if (!verification.ok) {
+      return {
+        status: "rejected",
+        reason: verification.reason,
+        message: verification.message,
+      };
+    }
+
+    const now = new Date().toISOString();
+    const record: FlowExecutionRecord = {
+      kind: "flow_execution",
+      id: createFlowExecutionId(),
+      txHash: verification.transactionHash,
+      chainId: verification.chainId,
+      contractAddress,
+      flowId: verification.flowId.toString(),
+      ownerWalletAddress: flow.owner,
+      sender: verification.owner,
+      tokenAddress: network.usdcAddress,
+      treasury: flow.treasury,
+      treasuryAmount: usdcTokenAmountFromBaseUnits(verification.treasuryAmountBaseUnits.toString()),
+      treasuryAmountBaseUnits: verification.treasuryAmountBaseUnits.toString(),
+      contributor: flow.contributor,
+      contributorAmount: usdcTokenAmountFromBaseUnits(
+        verification.contributorAmountBaseUnits.toString(),
+      ),
+      contributorAmountBaseUnits: verification.contributorAmountBaseUnits.toString(),
+      totalAmount: usdcTokenAmountFromBaseUnits(verification.amountBaseUnits.toString()),
+      totalAmountBaseUnits: verification.amountBaseUnits.toString(),
+      status: "confirmed",
+      blockNumber: verification.blockNumber.toString(),
+      confirmedAt: now,
+      createdAt: now,
+    };
+
+    const inserted = await repository.insertFlowExecution(record);
+    return { status: "verified", record: inserted.record, alreadyRecorded: !inserted.created };
+  });
+}
+
+/**
+ * List flow executions, optionally scoped to a single wallet.
+ *
+ * - `ownerWalletAddress` omitted → all records (legacy/test view).
+ * - `ownerWalletAddress` null    → [] (fail closed for anonymous callers).
+ *
+ * Flow executions are intentionally NOT included in spending summaries: the
+ * agent spending policy applies to agent-service payments only.
+ */
+export async function getTrustedFlowExecutions(input: {
+  ownerWalletAddress?: EvmAddress | null;
+} = {}): Promise<FlowExecutionRecord[]> {
+  return withLedger(async ({ repository }) => {
+    const all = await repository.listFlowExecutions();
+    const wallet = input.ownerWalletAddress;
+    if (wallet === undefined) return all;
+    if (wallet === null) return [];
+    return all.filter(
+      (record) => record.ownerWalletAddress.toLowerCase() === wallet.toLowerCase(),
+    );
   });
 }

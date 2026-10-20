@@ -1,9 +1,11 @@
 import { Pool } from "pg";
 
-import type { EvmAddress, PaymentIntent, TrustedPayment } from "@/types";
+import type { EvmAddress, FlowExecutionRecord, PaymentIntent, TrustedPayment } from "@/types";
+import { usdcTokenAmountFromBaseUnits } from "@/types/flow-execution";
 
 import {
   POSTGRES_PERSISTENCE,
+  type InsertFlowExecutionResult,
   type InsertPaymentResult,
   type TrustedPaymentRepository,
 } from "./repository";
@@ -71,6 +73,32 @@ CREATE INDEX IF NOT EXISTS agentpay_payment_intents_owner_idx
   ON agentpay_payment_intents (owner_wallet_address);
 CREATE INDEX IF NOT EXISTS agentpay_trusted_payments_owner_idx
   ON agentpay_trusted_payments (owner_wallet_address);
+
+-- Phase 49B.12.3 — verified ArcFlow executeSplit executions. A separate
+-- table (not agentpay_trusted_payments): flow executions are structurally
+-- distinct from agent-service payments and never affect agent spending.
+CREATE TABLE IF NOT EXISTS agentpay_flow_executions (
+  id TEXT PRIMARY KEY,
+  tx_hash TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL DEFAULT 'flow_execution',
+  chain_id INTEGER NOT NULL,
+  contract_address TEXT NOT NULL,
+  flow_id TEXT NOT NULL,
+  owner_wallet_address TEXT NOT NULL,
+  sender TEXT NOT NULL,
+  token_address TEXT NOT NULL,
+  treasury TEXT NOT NULL,
+  treasury_amount_base_units TEXT NOT NULL,
+  contributor TEXT NOT NULL,
+  contributor_amount_base_units TEXT NOT NULL,
+  total_amount_base_units TEXT NOT NULL,
+  status TEXT NOT NULL,
+  block_number TEXT NOT NULL,
+  confirmed_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS agentpay_flow_executions_owner_idx
+  ON agentpay_flow_executions (owner_wallet_address);
 `;
 
 interface IntentRow {
@@ -158,6 +186,53 @@ function rowToPayment(row: PaymentRow): TrustedPayment {
     confirmedAt: toIso(row.confirmed_at),
     createdAt: toIso(row.created_at),
     intentId: row.intent_id ?? null,
+  };
+}
+
+interface FlowExecutionRow {
+  id: string;
+  tx_hash: string;
+  kind: string;
+  chain_id: number;
+  contract_address: string;
+  flow_id: string;
+  owner_wallet_address: string;
+  sender: string;
+  token_address: string;
+  treasury: string;
+  treasury_amount_base_units: string;
+  contributor: string;
+  contributor_amount_base_units: string;
+  total_amount_base_units: string;
+  status: string;
+  block_number: string;
+  confirmed_at: Date;
+  created_at: Date;
+}
+
+function rowToFlowExecution(row: FlowExecutionRow): FlowExecutionRecord {
+  return {
+    kind: "flow_execution",
+    id: row.id,
+    txHash: row.tx_hash as FlowExecutionRecord["txHash"],
+    chainId: row.chain_id,
+    contractAddress: row.contract_address as EvmAddress,
+    flowId: row.flow_id,
+    ownerWalletAddress: row.owner_wallet_address as EvmAddress,
+    sender: row.sender as EvmAddress,
+    tokenAddress: row.token_address as EvmAddress,
+    treasury: row.treasury as EvmAddress,
+    treasuryAmount: usdcTokenAmountFromBaseUnits(row.treasury_amount_base_units),
+    treasuryAmountBaseUnits: row.treasury_amount_base_units,
+    contributor: row.contributor as EvmAddress,
+    contributorAmount: usdcTokenAmountFromBaseUnits(row.contributor_amount_base_units),
+    contributorAmountBaseUnits: row.contributor_amount_base_units,
+    totalAmount: usdcTokenAmountFromBaseUnits(row.total_amount_base_units),
+    totalAmountBaseUnits: row.total_amount_base_units,
+    status: "confirmed",
+    blockNumber: row.block_number,
+    confirmedAt: toIso(row.confirmed_at),
+    createdAt: toIso(row.created_at),
   };
 }
 
@@ -353,9 +428,81 @@ export function createPostgresTrustedRepository(connectionString: string): Trust
       return rows.map(rowToPayment);
     },
 
+    async findFlowExecutionByTxHash(txHash) {
+      // Canonical parameter; the lower() comparison is kept so any legacy
+      // mixed-case row still matches.
+      const canonical = txHash.toLowerCase();
+      const rows = await query<FlowExecutionRow>(
+        `SELECT * FROM agentpay_flow_executions WHERE lower(tx_hash) = lower($1) LIMIT 1`,
+        [canonical],
+      );
+      return rows[0] ? rowToFlowExecution(rows[0]) : null;
+    },
+
+    async insertFlowExecution(record): Promise<InsertFlowExecutionResult> {
+      // The UNIQUE constraint compares exact stored text, so the hash is
+      // canonicalised before insert: letter-case variants of the same
+      // transaction collide and the existing row is returned.
+      const canonicalTxHash = record.txHash.toLowerCase();
+      const inserted = await query<FlowExecutionRow>(
+        `INSERT INTO agentpay_flow_executions
+          (id, tx_hash, kind, chain_id, contract_address, flow_id, owner_wallet_address, sender,
+           token_address, treasury, treasury_amount_base_units, contributor, contributor_amount_base_units,
+           total_amount_base_units, status, block_number, confirmed_at, created_at)
+         VALUES (
+           $1, $2, $3, $4::integer, $5, $6, $7, $8,
+           $9, $10, $11, $12, $13,
+           $14, $15, $16, $17::timestamptz, $18::timestamptz
+         )
+         ON CONFLICT (tx_hash) DO NOTHING
+         RETURNING *`,
+        [
+          record.id,
+          canonicalTxHash,
+          record.kind,
+          record.chainId,
+          record.contractAddress,
+          record.flowId,
+          record.ownerWalletAddress,
+          record.sender,
+          record.tokenAddress,
+          record.treasury,
+          record.treasuryAmountBaseUnits,
+          record.contributor,
+          record.contributorAmountBaseUnits,
+          record.totalAmountBaseUnits,
+          record.status,
+          record.blockNumber,
+          record.confirmedAt,
+          record.createdAt,
+        ],
+      );
+
+      if (inserted[0]) {
+        return { record: rowToFlowExecution(inserted[0]), created: true };
+      }
+
+      const existing = await query<FlowExecutionRow>(
+        `SELECT * FROM agentpay_flow_executions WHERE lower(tx_hash) = lower($1) LIMIT 1`,
+        [canonicalTxHash],
+      );
+      if (!existing[0]) {
+        throw new Error("Flow execution insert conflicted but no existing record was found.");
+      }
+      return { record: rowToFlowExecution(existing[0]), created: false };
+    },
+
+    async listFlowExecutions() {
+      const rows = await query<FlowExecutionRow>(
+        `SELECT * FROM agentpay_flow_executions ORDER BY confirmed_at ASC`,
+      );
+      return rows.map(rowToFlowExecution);
+    },
+
     async clearAll() {
       await query(`DELETE FROM agentpay_trusted_payments`);
       await query(`DELETE FROM agentpay_payment_intents`);
+      await query(`DELETE FROM agentpay_flow_executions`);
     },
   };
 }

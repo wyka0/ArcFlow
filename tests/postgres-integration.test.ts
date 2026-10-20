@@ -4,6 +4,7 @@ import { Pool } from "pg";
 import { createPostgresTrustedRepository } from "@/lib/payments/server/postgres";
 import { createPostgresAuthSessionRepository } from "@/lib/auth/repository-postgres";
 import type { PaymentIntent, TrustedPayment } from "@/types/trusted-payment";
+import type { FlowExecutionRecord } from "@/types/flow-execution";
 import type { AuthenticatedSession } from "@/lib/auth/repository";
 
 /**
@@ -94,6 +95,33 @@ function makeTestSession(id: string): AuthenticatedSession {
   };
 }
 
+function makeTestFlowExecution(overrides?: Partial<FlowExecutionRecord>): FlowExecutionRecord {
+  return {
+    kind: "flow_execution",
+    id: `${RUN_ID}-flowexec-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    txHash: `0x${Date.now().toString(16).padStart(8, "0")}${Math.random().toString(16).slice(2).padStart(56, "0")}`,
+    chainId: 5042,
+    contractAddress: "0x4444444444444444444444444444444444444444",
+    flowId: "1",
+    ownerWalletAddress: "0x1111111111111111111111111111111111111111",
+    sender: "0x1111111111111111111111111111111111111111",
+    tokenAddress: "0x3600000000000000000000000000000000000000",
+    treasury: "0x2222222222222222222222222222222222222222",
+    treasuryAmount: { amount: 0.008, currency: "USDC" },
+    treasuryAmountBaseUnits: "8000",
+    contributor: "0x3333333333333333333333333333333333333333",
+    contributorAmount: { amount: 0.002, currency: "USDC" },
+    contributorAmountBaseUnits: "2000",
+    totalAmount: { amount: 0.01, currency: "USDC" },
+    totalAmountBaseUnits: "10000",
+    status: "confirmed",
+    blockNumber: "1",
+    confirmedAt: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
+    ...overrides,
+  };
+}
+
 d("PostgreSQL integration tests (isolated Neon branch)", () => {
   beforeAll(async () => {
     if (!configured || !TEST_URL) return;
@@ -153,6 +181,11 @@ d("PostgreSQL integration tests (isolated Neon branch)", () => {
     } catch (e) {
       cleanupErrors.push(`auth_sessions[run-prefix]: ${(e as Error).message}`);
     }
+    try {
+      await pool.query("DELETE FROM agentpay_flow_executions WHERE id LIKE $1", [`${RUN_ID}%`]);
+    } catch (e) {
+      cleanupErrors.push(`flow_executions: ${(e as Error).message}`);
+    }
     // Service and agent tables: created by separate adapters not instantiated
     // in this test. Tolerate "does not exist" errors; only report other failures.
     for (const table of ["agentpay_service_requests", "agentpay_service_results"]) {
@@ -180,6 +213,7 @@ d("PostgreSQL integration tests (isolated Neon branch)", () => {
         { table: "agentpay_payment_intents", col: "agent_id", pattern: RUN_ID },
         { table: "agentpay_trusted_payments", col: "agent_id", pattern: RUN_ID },
         { table: "agentpay_auth_sessions", col: "id", pattern: `${RUN_ID}-%` },
+        { table: "agentpay_flow_executions", col: "id", pattern: `${RUN_ID}%` },
       ];
       for (const { table, col, pattern } of checks) {
         try {
@@ -288,6 +322,59 @@ d("PostgreSQL integration tests (isolated Neon branch)", () => {
     await authRepo.revoke(session.id);
     const revoked = await authRepo.findById(session.id);
     expect(revoked).toBeFalsy();
+  });
+
+  it("creates the flow-execution table and round-trips a record", async () => {
+    const tables = await pool.query(
+      "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'agentpay_flow_executions'",
+    );
+    expect(tables.rows.length).toBeGreaterThanOrEqual(1);
+
+    const execution = makeTestFlowExecution();
+    const result = await testRepo.insertFlowExecution(execution);
+    expect(result.created).toBe(true);
+    expect(result.record.kind).toBe("flow_execution");
+
+    const found = await testRepo.findFlowExecutionByTxHash(execution.txHash);
+    expect(found).toBeTruthy();
+    expect(found?.ownerWalletAddress).toBe(execution.ownerWalletAddress);
+    expect(found?.totalAmountBaseUnits).toBe("10000");
+
+    const listed = await testRepo.listFlowExecutions();
+    expect(listed.some((record) => record.id === execution.id)).toBe(true);
+  });
+
+  it("enforces UNIQUE tx_hash for flow executions", async () => {
+    const execution = makeTestFlowExecution();
+    const first = await testRepo.insertFlowExecution(execution);
+    expect(first.created).toBe(true);
+
+    const duplicate = makeTestFlowExecution({
+      id: `${RUN_ID}-flowexec-dup`,
+      txHash: execution.txHash,
+    });
+    const dupResult = await testRepo.insertFlowExecution(duplicate);
+    expect(dupResult.created).toBe(false);
+    expect(dupResult.record.id).toBe(execution.id);
+  });
+
+  it("canonicalises the flow-execution tx_hash and rejects case-variant duplicates", async () => {
+    const execution = makeTestFlowExecution();
+    const first = await testRepo.insertFlowExecution(execution);
+    expect(first.created).toBe(true);
+    expect(first.record.txHash).toBe(execution.txHash);
+
+    const variant = makeTestFlowExecution({
+      id: `${RUN_ID}-flowexec-case`,
+      txHash: `0x${execution.txHash.slice(2).toUpperCase()}` as FlowExecutionRecord["txHash"],
+    });
+    const duplicate = await testRepo.insertFlowExecution(variant);
+    expect(duplicate.created).toBe(false);
+    expect(duplicate.record.id).toBe(execution.id);
+    expect(duplicate.record.txHash).toBe(execution.txHash);
+
+    const found = await testRepo.findFlowExecutionByTxHash(variant.txHash);
+    expect(found?.txHash).toBe(execution.txHash);
   });
 
   it("propagates connection errors for a bad connection string", async () => {

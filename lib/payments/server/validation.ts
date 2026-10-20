@@ -95,6 +95,35 @@ export function parseVerifyRequest(raw: unknown): ParseResult<VerifyRequestBody>
   return { ok: true, body: { txHash: body.txHash, intentId: body.intentId } };
 }
 
+export interface FlowExecutionVerifyRequestBody {
+  txHash: TransactionHash;
+}
+
+/**
+ * Flow-execution verification requires only the transaction hash. The flow id,
+ * owner, recipients, and amounts are derived server-side from the receipt and
+ * the contract's on-chain state — none may be supplied by the client.
+ */
+export function parseFlowExecutionVerifyRequest(
+  raw: unknown,
+): ParseResult<FlowExecutionVerifyRequestBody> {
+  if (typeof raw !== "object" || raw === null) {
+    return { ok: false, code: "INVALID_JSON", message: "The request body must be a JSON object." };
+  }
+
+  const body = raw as Record<string, unknown>;
+
+  if (!isTransactionHash(body.txHash)) {
+    return {
+      ok: false,
+      code: "INVALID_TX_HASH",
+      message: "txHash must be a valid 32-byte transaction hash.",
+    };
+  }
+
+  return { ok: true, body: { txHash: body.txHash } };
+}
+
 /** Resolves the server-configured recipient, or null when none is configured. */
 export function resolveExpectedRecipient(serviceId: string): EvmAddress | null {
   return resolveServerRecipient(serviceId);

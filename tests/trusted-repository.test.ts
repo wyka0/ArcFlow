@@ -3,6 +3,8 @@ import { describe, expect, it, beforeEach } from "vitest";
 import { createInMemoryTrustedRepository, type TrustedPaymentRepository } from "@/lib/payments/server/repository";
 import type { PaymentIntent, TrustedPayment, TransactionHash } from "@/types";
 
+import { makeFlowExecutionRecord, uppercaseHash } from "./flow-execution-fixtures";
+
 function createTrustedPayment(overrides: Partial<TrustedPayment> = {}): TrustedPayment {
   const now = new Date().toISOString();
   return {
@@ -210,6 +212,86 @@ describe("TrustedPaymentRepository (in-memory)", () => {
       expect(await repo.listPayments()).toHaveLength(0);
     });
   });
+
+  describe("flow executions", () => {
+    it("inserts and finds a flow execution by transaction hash", async () => {
+      const execution = makeFlowExecutionRecord();
+      const result = await repo.insertFlowExecution(execution);
+
+      expect(result.created).toBe(true);
+      expect(result.record.id).toBe(execution.id);
+      expect(result.record.kind).toBe("flow_execution");
+
+      const found = await repo.findFlowExecutionByTxHash(execution.txHash);
+      expect(found?.id).toBe(execution.id);
+    });
+
+    it("finds a flow execution case-insensitively by hash", async () => {
+      const execution = makeFlowExecutionRecord();
+      await repo.insertFlowExecution(execution);
+
+      const upper = execution.txHash.toUpperCase().replace("0X", "0x") as TransactionHash;
+      const found = await repo.findFlowExecutionByTxHash(upper);
+      expect(found?.id).toBe(execution.id);
+    });
+
+    it("returns null for an unknown flow-execution hash", async () => {
+      const found = await repo.findFlowExecutionByTxHash(`0x${"9".repeat(64)}` as TransactionHash);
+      expect(found).toBeNull();
+    });
+
+    it("is idempotent on transaction hash — returns the existing record", async () => {
+      const first = makeFlowExecutionRecord({ id: "flx_1" });
+      const second = makeFlowExecutionRecord({ id: "flx_2" });
+      await repo.insertFlowExecution(first);
+
+      const result = await repo.insertFlowExecution(second);
+      expect(result.created).toBe(false);
+      expect(result.record.id).toBe("flx_1");
+    });
+
+    it("stores a canonical hash and treats a case-variant insert as existing", async () => {
+      const execution = makeFlowExecutionRecord({ id: "flx_case" });
+      await repo.insertFlowExecution(execution);
+
+      const variant = makeFlowExecutionRecord({
+        id: "flx_case_variant",
+        txHash: uppercaseHash(execution.txHash),
+      });
+      const result = await repo.insertFlowExecution(variant);
+
+      expect(result.created).toBe(false);
+      expect(result.record.id).toBe("flx_case");
+      expect(result.record.txHash).toBe(execution.txHash);
+
+      // Lookups with either letter case resolve to the canonical record.
+      const found = await repo.findFlowExecutionByTxHash(uppercaseHash(execution.txHash));
+      expect(found?.txHash).toBe(execution.txHash);
+    });
+
+    it("lists flow executions independently of payments", async () => {
+      await repo.insertPayment(createTrustedPayment());
+      await repo.insertFlowExecution(makeFlowExecutionRecord({ id: "flx_1" }));
+
+      const executions = await repo.listFlowExecutions();
+      expect(executions.map((record) => record.id)).toEqual(["flx_1"]);
+
+      // Flow executions never leak into the agent-payment list.
+      const payments = await repo.listPayments();
+      expect(payments).toHaveLength(1);
+      expect(payments.some((record) => record.id === "flx_1")).toBe(false);
+    });
+
+    it("clears flow executions with everything else", async () => {
+      const execution = makeFlowExecutionRecord();
+      await repo.insertFlowExecution(execution);
+
+      await repo.clearAll();
+
+      expect(await repo.listFlowExecutions()).toHaveLength(0);
+      expect(await repo.findFlowExecutionByTxHash(execution.txHash)).toBeNull();
+    });
+  });
 });
 
 describe("TrustedPaymentRepository contract (interface)", () => {
@@ -247,6 +329,26 @@ describe("TrustedPaymentRepository contract (interface)", () => {
 
       await repo.clearAll();
       expect(await repo.listPayments()).toHaveLength(0);
+    });
+
+    it("supports flow-execution insert / find / list / idempotency / clear", async () => {
+      const execution = makeFlowExecutionRecord();
+      const inserted = await repo.insertFlowExecution(execution);
+      expect(inserted.created).toBe(true);
+
+      const byHash = await repo.findFlowExecutionByTxHash(execution.txHash);
+      expect(byHash?.id).toBe(execution.id);
+
+      const listed = await repo.listFlowExecutions();
+      expect(listed.some((record) => record.id === execution.id)).toBe(true);
+
+      // Idempotent: the same txHash never creates a second record.
+      const duplicate = await repo.insertFlowExecution(makeFlowExecutionRecord({ id: "flx_dup" }));
+      expect(duplicate.created).toBe(false);
+      expect(duplicate.record.id).toBe(execution.id);
+
+      await repo.clearAll();
+      expect(await repo.listFlowExecutions()).toHaveLength(0);
     });
   }
 

@@ -1,4 +1,10 @@
-import type { EvmAddress, PaymentIntent, TransactionHash, TrustedPayment } from "@/types";
+import type {
+  EvmAddress,
+  FlowExecutionRecord,
+  PaymentIntent,
+  TransactionHash,
+  TrustedPayment,
+} from "@/types";
 
 /**
  * The trusted ledger repository.
@@ -21,6 +27,12 @@ export interface InsertPaymentResult {
   created: boolean;
 }
 
+export interface InsertFlowExecutionResult {
+  record: FlowExecutionRecord;
+  /** False when an existing record for the same txHash was returned. */
+  created: boolean;
+}
+
 export interface TrustedPaymentRepository {
   readonly persistence: TrustedPersistenceDescriptor;
 
@@ -35,6 +47,12 @@ export interface TrustedPaymentRepository {
   /** Idempotent: the same txHash can never create a second record. */
   insertPayment(record: TrustedPayment): Promise<InsertPaymentResult>;
   listPayments(): Promise<TrustedPayment[]>;
+
+  findFlowExecutionByTxHash(txHash: TransactionHash): Promise<FlowExecutionRecord | null>;
+  /** Idempotent: the same txHash can never create a second flow-execution record. */
+  insertFlowExecution(record: FlowExecutionRecord): Promise<InsertFlowExecutionResult>;
+  listFlowExecutions(): Promise<FlowExecutionRecord[]>;
+
   clearAll(): Promise<void>;
 }
 
@@ -63,6 +81,8 @@ export function createInMemoryTrustedRepository(): TrustedPaymentRepository {
   const intents = new Map<string, PaymentIntent>();
   const paymentsByHash = new Map<string, TrustedPayment>();
   const paymentsById = new Map<string, TrustedPayment>();
+  const flowExecutionsByHash = new Map<string, FlowExecutionRecord>();
+  const flowExecutionsById = new Map<string, FlowExecutionRecord>();
 
   function normalizeIntent(intent: PaymentIntent): PaymentIntent {
     return { ...intent, ownerWalletAddress: intent.ownerWalletAddress ?? null };
@@ -145,10 +165,40 @@ export function createInMemoryTrustedRepository(): TrustedPaymentRepository {
       return [...paymentsById.values()].map(normalizePayment).sort((a, b) => a.confirmedAt.localeCompare(b.confirmedAt));
     },
 
+    async findFlowExecutionByTxHash(txHash) {
+      const record = flowExecutionsByHash.get(txHash.toLowerCase());
+      return record ?? null;
+    },
+
+    async insertFlowExecution(record) {
+      // Canonicalise before storing: the uniqueness key and the persisted
+      // record use the lowercase hash, so a letter-case variant of an already
+      // recorded transaction returns the existing record.
+      const canonical: FlowExecutionRecord = {
+        ...record,
+        txHash: record.txHash.toLowerCase() as FlowExecutionRecord["txHash"],
+      };
+      const existing = flowExecutionsByHash.get(canonical.txHash);
+      if (existing) {
+        return { record: existing, created: false };
+      }
+      flowExecutionsByHash.set(canonical.txHash, canonical);
+      flowExecutionsById.set(canonical.id, canonical);
+      return { record: canonical, created: true };
+    },
+
+    async listFlowExecutions() {
+      return [...flowExecutionsById.values()].sort((a, b) =>
+        a.confirmedAt.localeCompare(b.confirmedAt),
+      );
+    },
+
     async clearAll() {
       intents.clear();
       paymentsByHash.clear();
       paymentsById.clear();
+      flowExecutionsByHash.clear();
+      flowExecutionsById.clear();
     },
   };
 }
