@@ -33,11 +33,32 @@ export interface InsertFlowExecutionResult {
   created: boolean;
 }
 
+/**
+ * Result of the atomic intent settlement (Phase 51.2, L4).
+ *
+ *  - `"settled"`: the payment was inserted and the intent consumed in one
+ *    indivisible operation.
+ *  - `"already_recorded"`: the same transaction hash was already recorded
+ *    (safe retry); the existing record is returned and the intent is consumed
+ *    if it was still pending (heals a legacy insert-without-consume state).
+ *  - `"intent_already_settled"`: the intent was already consumed by a
+ *    different transaction — nothing was written.
+ */
+export type SettlementOutcome =
+  | { status: "settled"; record: TrustedPayment }
+  | { status: "already_recorded"; record: TrustedPayment }
+  | { status: "intent_already_settled" };
+
 export interface TrustedPaymentRepository {
   readonly persistence: TrustedPersistenceDescriptor;
 
   createIntent(intent: PaymentIntent): Promise<void>;
   getIntent(id: string): Promise<PaymentIntent | null>;
+  /**
+   * Consume a pending intent. Conditional (Phase 51.2, L4): an intent that is
+   * missing or already consumed is left untouched. Settlement flows must use
+   * {@link settleIntent}, which makes persistence and consumption atomic.
+   */
   consumeIntent(id: string, txHash: TransactionHash, at: string): Promise<void>;
 
   findByTxHash(txHash: TransactionHash): Promise<TrustedPayment | null>;
@@ -47,6 +68,15 @@ export interface TrustedPaymentRepository {
   /** Idempotent: the same txHash can never create a second record. */
   insertPayment(record: TrustedPayment): Promise<InsertPaymentResult>;
   listPayments(): Promise<TrustedPayment[]>;
+
+  /**
+   * Atomically settle an intent (Phase 51.2, L4): insert the payment record
+   * and consume the intent, or report a typed conflict. Enforces both
+   * settlement invariants:
+   *  - at most one payment settles a given intent;
+   *  - a payment record never persists unless that intent is (or gets) consumed.
+   */
+  settleIntent(input: { intentId: string; record: TrustedPayment }): Promise<SettlementOutcome>;
 
   findFlowExecutionByTxHash(txHash: TransactionHash): Promise<FlowExecutionRecord | null>;
   /** Idempotent: the same txHash can never create a second flow-execution record. */
@@ -107,9 +137,55 @@ export function createInMemoryTrustedRepository(): TrustedPaymentRepository {
     },
 
     async consumeIntent(id, txHash, at) {
+      // Conditional (Phase 51.2, L4): never re-consume or force-consume an
+      // intent that is missing or already settled.
       const intent = intents.get(id);
-      if (!intent) return;
+      if (!intent || intent.status !== "pending") return;
       intents.set(id, { ...intent, status: "consumed", txHash, expiresAt: intent.expiresAt, createdAt: at });
+    },
+
+    async settleIntent({ intentId, record }) {
+      // Phase 51.2 (L4) — atomic in-memory settlement. Claiming the intent and
+      // inserting the payment happen in one synchronous critical section (no
+      // await between them), so single-threaded JS cannot interleave two
+      // competing settlements: exactly one wins, the loser reports
+      // "intent_already_settled" without writing anything.
+      const canonical = normalizePayment({
+        ...record,
+        txHash: record.txHash.toLowerCase() as TrustedPayment["txHash"],
+      });
+
+      // Safe retry: the same hash is already recorded — still claim the intent
+      // if it is pending, healing a legacy insert-without-consume state.
+      const existing = paymentsByHash.get(canonical.txHash);
+      if (existing) {
+        const pendingIntent = intents.get(intentId);
+        if (pendingIntent && pendingIntent.status === "pending") {
+          intents.set(intentId, {
+            ...pendingIntent,
+            status: "consumed",
+            txHash: existing.txHash,
+            expiresAt: pendingIntent.expiresAt,
+            createdAt: pendingIntent.createdAt,
+          });
+        }
+        return { status: "already_recorded", record: normalizePayment(existing) };
+      }
+
+      const intent = intents.get(intentId);
+      if (!intent || intent.status !== "pending") {
+        return { status: "intent_already_settled" };
+      }
+      intents.set(intentId, {
+        ...intent,
+        status: "consumed",
+        txHash: canonical.txHash,
+        expiresAt: intent.expiresAt,
+        createdAt: intent.createdAt,
+      });
+      paymentsByHash.set(canonical.txHash, canonical);
+      paymentsById.set(canonical.id, canonical);
+      return { status: "settled", record: canonical };
     },
 
     async findByTxHash(txHash) {

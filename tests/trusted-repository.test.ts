@@ -232,6 +232,79 @@ describe("TrustedPaymentRepository (in-memory)", () => {
     });
   });
 
+  describe("intent settlement (settleIntent)", () => {
+    it("settles a pending intent with a new payment", async () => {
+      const intent = createPaymentIntent({ id: "intent_settle" });
+      await repo.createIntent(intent);
+      const payment = createTrustedPayment({ id: "pay_settle", intentId: intent.id });
+
+      const result = await repo.settleIntent({ intentId: intent.id, record: payment });
+
+      expect(result.status).toBe("settled");
+      if (result.status !== "settled") return;
+      expect(result.record.txHash).toBe(payment.txHash);
+      const settled = await repo.getIntent(intent.id);
+      expect(settled?.status).toBe("consumed");
+      expect(settled?.txHash).toBe(payment.txHash);
+      expect(await repo.listPayments()).toHaveLength(1);
+    });
+
+    it("reports already_recorded for a same-hash retry when the intent is already consumed (D1 parity)", async () => {
+      const intent = createPaymentIntent({ id: "intent_retry" });
+      await repo.createIntent(intent);
+      const payment = createTrustedPayment({ id: "pay_retry", intentId: intent.id });
+
+      const first = await repo.settleIntent({ intentId: intent.id, record: payment });
+      expect(first.status).toBe("settled");
+
+      // Same hash, intent already consumed — idempotent retry.
+      const retry = await repo.settleIntent({ intentId: intent.id, record: payment });
+      expect(retry.status).toBe("already_recorded");
+      if (retry.status !== "already_recorded") return;
+      expect(retry.record.id).toBe("pay_retry");
+      expect(retry.record.txHash).toBe(payment.txHash);
+
+      // The existing payment remains the only record.
+      expect(await repo.listPayments()).toHaveLength(1);
+      const settledIntent = await repo.getIntent(intent.id);
+      expect(settledIntent?.status).toBe("consumed");
+      expect(settledIntent?.txHash).toBe(payment.txHash);
+    });
+
+    it("rejects a genuinely new payment when the intent is already consumed and writes nothing", async () => {
+      const intent = createPaymentIntent({ id: "intent_conflict" });
+      await repo.createIntent(intent);
+      const winner = createTrustedPayment({ id: "pay_winner", intentId: intent.id });
+      await repo.settleIntent({ intentId: intent.id, record: winner });
+
+      const loser = createTrustedPayment({
+        id: "pay_loser",
+        intentId: intent.id,
+        txHash: `0x${"c".repeat(64)}` as TransactionHash,
+      });
+      const conflict = await repo.settleIntent({ intentId: intent.id, record: loser });
+
+      expect(conflict.status).toBe("intent_already_settled");
+      expect(await repo.findByTxHash(loser.txHash)).toBeNull();
+      expect(await repo.listPayments()).toHaveLength(1);
+    });
+
+    it("never changes an unrelated intent during settlement", async () => {
+      const target = createPaymentIntent({ id: "intent_target" });
+      const bystander = createPaymentIntent({ id: "intent_bystander" });
+      await repo.createIntent(target);
+      await repo.createIntent(bystander);
+      const payment = createTrustedPayment({ id: "pay_target", intentId: target.id });
+
+      await repo.settleIntent({ intentId: target.id, record: payment });
+
+      expect((await repo.getIntent(target.id))?.status).toBe("consumed");
+      const untouched = await repo.getIntent(bystander.id);
+      expect(untouched?.status).toBe("pending");
+      expect(untouched?.txHash).toBeNull();
+    });
+  });
+
   describe("flow executions", () => {
     it("inserts and finds a flow execution by transaction hash", async () => {
       const execution = makeFlowExecutionRecord();

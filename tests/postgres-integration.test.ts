@@ -328,6 +328,85 @@ d("PostgreSQL integration tests (isolated Neon branch)", () => {
     expect(found?.txHash).toBe(payment.txHash);
   });
 
+  it("settles an intent atomically: payment inserted and intent consumed", async () => {
+    const intent = makeTestIntent();
+    await testRepo.createIntent(intent);
+    const payment = makeTestPayment({ intentId: intent.id });
+
+    const result = await testRepo.settleIntent({ intentId: intent.id, record: payment });
+    expect(result.status).toBe("settled");
+    if (result.status !== "settled") return;
+    expect(result.record.txHash).toBe(payment.txHash);
+
+    const consumed = await testRepo.getIntent(intent.id);
+    expect(consumed?.status).toBe("consumed");
+    expect(consumed?.txHash).toBe(payment.txHash);
+    const found = await testRepo.findByTxHash(payment.txHash);
+    expect(found?.id).toBe(payment.id);
+  });
+
+  it("rolls back the payment insert when the intent is already settled", async () => {
+    const intent = makeTestIntent();
+    await testRepo.createIntent(intent);
+    const winner = makeTestPayment({ intentId: intent.id });
+    const settled = await testRepo.settleIntent({ intentId: intent.id, record: winner });
+    expect(settled.status).toBe("settled");
+
+    // A different genuine transaction attempts to settle the same intent.
+    const loser = makeTestPayment({ intentId: intent.id });
+    const conflict = await testRepo.settleIntent({ intentId: intent.id, record: loser });
+    expect(conflict.status).toBe("intent_already_settled");
+
+    // The losing payment was rolled back — nothing persists without consumption.
+    const loserRow = await testRepo.findByTxHash(loser.txHash);
+    expect(loserRow).toBeNull();
+  });
+
+  it("same-hash settle retry heals a legacy insert-without-consume intent", async () => {
+    const intent = makeTestIntent();
+    await testRepo.createIntent(intent);
+    const payment = makeTestPayment({ intentId: intent.id });
+
+    // Legacy crash-window state: payment recorded, intent still pending.
+    await testRepo.insertPayment(payment);
+    expect((await testRepo.getIntent(intent.id))?.status).toBe("pending");
+
+    const retry = await testRepo.settleIntent({ intentId: intent.id, record: payment });
+    expect(retry.status).toBe("already_recorded");
+    const consumed = await testRepo.getIntent(intent.id);
+    expect(consumed?.status).toBe("consumed");
+  });
+
+  it("same-hash settle retry on an already-consumed intent is idempotent (D1)", async () => {
+    const intent = makeTestIntent();
+    const bystander = makeTestIntent({ id: `${RUN_ID}-intent-bystander` });
+    await testRepo.createIntent(intent);
+    await testRepo.createIntent(bystander);
+    const payment = makeTestPayment({ intentId: intent.id });
+
+    const first = await testRepo.settleIntent({ intentId: intent.id, record: payment });
+    expect(first.status).toBe("settled");
+
+    // Same hash, intent already consumed — must report already_recorded (not
+    // intent_already_settled), keep the single existing payment, and leave the
+    // bystander intent untouched.
+    const retry = await testRepo.settleIntent({ intentId: intent.id, record: payment });
+    expect(retry.status).toBe("already_recorded");
+    if (retry.status === "already_recorded") {
+      expect(retry.record.id).toBe(payment.id);
+      expect(retry.record.txHash).toBe(payment.txHash);
+    }
+
+    const stillConsumed = await testRepo.getIntent(intent.id);
+    expect(stillConsumed?.status).toBe("consumed");
+    expect(stillConsumed?.txHash).toBe(payment.txHash);
+    const byHash = await testRepo.findByTxHash(payment.txHash);
+    expect(byHash?.id).toBe(payment.id);
+    const untouched = await testRepo.getIntent(bystander.id);
+    expect(untouched?.status).toBe("pending");
+    expect(untouched?.txHash).toBeNull();
+  });
+
   it("creates and retrieves an auth session, then revokes it", async () => {
     const sessionId = `${RUN_ID}-auth-roundtrip`;
     const session = makeTestSession(sessionId);

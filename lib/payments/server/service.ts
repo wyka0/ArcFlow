@@ -221,6 +221,15 @@ export async function verifyTrustedPayment(input: {
           message: "You are not authorised to verify this payment.",
         };
       }
+      // Heal a legacy insert-without-consume state (Phase 51.2, L4): the
+      // record exists, so its own intent was verified against this hash —
+      // complete the interrupted settlement if that intent is still pending.
+      if (existing.intentId) {
+        const recordedIntent = await repository.getIntent(existing.intentId);
+        if (recordedIntent && recordedIntent.status === "pending") {
+          await repository.consumeIntent(recordedIntent.id, existing.txHash, new Date().toISOString());
+        }
+      }
       return {
         status: "verified",
         record: existing,
@@ -323,15 +332,216 @@ export async function verifyTrustedPayment(input: {
       intentId: intent.id,
     };
 
-    const inserted = await repository.insertPayment(record);
-    if (inserted.created) {
-      await repository.consumeIntent(intent.id, inserted.record.txHash, now);
+    const settlement = await repository.settleIntent({ intentId: intent.id, record });
+    if (settlement.status === "intent_already_settled") {
+      return {
+        status: "rejected",
+        reason: "INTENT_ALREADY_SETTLED",
+        message: "This payment intent has already been settled by another transaction.",
+      };
+    }
+    // Defensive (Phase 51.2): a concurrently recorded record for the same
+    // hash must never be disclosed to a different wallet.
+    if (
+      settlement.record.ownerWalletAddress &&
+      input.authenticatedWallet &&
+      settlement.record.ownerWalletAddress.toLowerCase() !== input.authenticatedWallet.toLowerCase()
+    ) {
+      return {
+        status: "rejected",
+        reason: "FORBIDDEN",
+        message: "You are not authorised to verify this payment.",
+      };
     }
 
     return {
       status: "verified",
-      record: inserted.record,
-      alreadyRecorded: !inserted.created,
+      record: settlement.record,
+      alreadyRecorded: settlement.status === "already_recorded",
+      spending: await spendFrom(repository),
+    };
+  });
+}
+
+export type RecoverOutcome =
+  | {
+      status: "recovered";
+      record: TrustedPayment;
+      alreadyRecorded: boolean;
+      spending: SpendingSummary;
+    }
+  | { status: "rejected"; reason: string; message: string };
+
+/**
+ * Recover a payment for an intent whose transaction was submitted on-chain
+ * but whose verification never completed (the intent may already be expired —
+ * expiry is intentionally bypassed, matching the documented recovery flow).
+ *
+ * Ownership is mandatory and strict (Phase 51.2, L3): the intent MUST be owned
+ * by the authenticated wallet. Ownerless intents cannot be recovered and
+ * ownerless payment records are never disclosed — a transaction hash is
+ * public chain data and proves nothing about ownership.
+ *
+ * Settlement goes through the shared atomic `repository.settleIntent`
+ * operation (Phase 51.2, L4), so exactly one payment can settle an intent and
+ * a payment never persists without its intent being consumed.
+ */
+export async function recoverTrustedPayment(input: {
+  intentId: string;
+  txHash: `0x${string}`;
+  authenticatedWallet: EvmAddress;
+  chain?: ArcChainReader;
+}): Promise<RecoverOutcome> {
+  return withLedger(async ({ repository }) => {
+    const intent = await repository.getIntent(input.intentId);
+    if (!intent) {
+      return {
+        status: "rejected",
+        reason: "INTENT_NOT_FOUND",
+        message: "Payment intent not found.",
+      };
+    }
+
+    // Phase 51.2 (L3): ownerless intents cannot be recovered.
+    if (!intent.ownerWalletAddress) {
+      return {
+        status: "rejected",
+        reason: "OWNER_REQUIRED",
+        message: "Recovery requires a payment intent owned by a wallet.",
+      };
+    }
+    if (intent.ownerWalletAddress.toLowerCase() !== input.authenticatedWallet.toLowerCase()) {
+      return {
+        status: "rejected",
+        reason: "FORBIDDEN",
+        message: "You are not authorised to recover this payment.",
+      };
+    }
+
+    if (intent.status === "consumed") {
+      return {
+        status: "rejected",
+        reason: "INTENT_ALREADY_SETTLED",
+        message: "This payment intent has already been settled.",
+      };
+    }
+
+    const existing = await repository.findByTxHash(input.txHash);
+    if (existing) {
+      // Phase 51.2 (L3): never disclose an ownerless or foreign record.
+      if (
+        !existing.ownerWalletAddress ||
+        existing.ownerWalletAddress.toLowerCase() !== input.authenticatedWallet.toLowerCase()
+      ) {
+        return {
+          status: "rejected",
+          reason: "FORBIDDEN",
+          message: "You are not authorised to verify this payment.",
+        };
+      }
+      // Heal a legacy insert-without-consume state (Phase 51.2, L4), but only
+      // when the recorded payment belongs to this intent — a hash recorded
+      // for a different intent was never verified against this one.
+      if (existing.intentId === intent.id) {
+        await repository.consumeIntent(intent.id, existing.txHash, new Date().toISOString());
+      }
+      return {
+        status: "recovered",
+        record: existing,
+        alreadyRecorded: true,
+        spending: await spendFrom(repository),
+      };
+    }
+
+    const network = getArcNetworkByChainId(intent.chainId);
+    if (!network) {
+      return {
+        status: "rejected",
+        reason: "WRONG_CHAIN",
+        message: "The payment intent targets an unsupported network.",
+      };
+    }
+    if (intent.currency !== "USDC") {
+      return {
+        status: "rejected",
+        reason: "VERIFICATION_MISMATCH",
+        message: "Transaction does not match the original intent.",
+      };
+    }
+
+    const reader = input.chain ?? createArcChainReader(network);
+    const observedChainId = await reader.getChainId();
+    const receipt = await reader.getTransactionReceipt(input.txHash);
+
+    const verification = verifyUsdcPayment({
+      transactionHash: input.txHash,
+      network,
+      expected: {
+        chainId: intent.chainId,
+        tokenAddress: intent.tokenAddress,
+        recipient: intent.recipient,
+        amount: intent.amount,
+        sender: intent.sender,
+      },
+      receipt,
+      observedChainId,
+    });
+
+    if (!verification.ok) {
+      return {
+        status: "rejected",
+        reason: verification.reason,
+        message: verification.message,
+      };
+    }
+
+    const now = new Date().toISOString();
+    const record: TrustedPayment = {
+      id: createPaymentId(),
+      txHash: verification.transactionHash,
+      chainId: verification.chainId,
+      tokenAddress: verification.tokenAddress,
+      agentId: intent.agentId,
+      serviceId: intent.serviceId,
+      serviceName: intent.serviceName,
+      sender: verification.sender,
+      recipient: verification.recipient,
+      amount: verification.amount,
+      currency: "USDC",
+      amountBaseUnits: verification.amountBaseUnits,
+      status: "confirmed",
+      blockNumber: verification.blockNumber.toString(),
+      confirmedAt: now,
+      createdAt: now,
+      ownerWalletAddress: intent.ownerWalletAddress,
+      intentId: intent.id,
+    };
+
+    const settlement = await repository.settleIntent({ intentId: intent.id, record });
+    if (settlement.status === "intent_already_settled") {
+      return {
+        status: "rejected",
+        reason: "INTENT_ALREADY_SETTLED",
+        message: "This payment intent has already been settled by another transaction.",
+      };
+    }
+    // Defensive (Phase 51.2): a concurrently recorded record for the same
+    // hash must never be disclosed to a different wallet.
+    if (
+      settlement.record.ownerWalletAddress &&
+      settlement.record.ownerWalletAddress.toLowerCase() !== input.authenticatedWallet.toLowerCase()
+    ) {
+      return {
+        status: "rejected",
+        reason: "FORBIDDEN",
+        message: "You are not authorised to verify this payment.",
+      };
+    }
+
+    return {
+      status: "recovered",
+      record: settlement.record,
+      alreadyRecorded: settlement.status === "already_recorded",
       spending: await spendFrom(repository),
     };
   });

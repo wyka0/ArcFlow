@@ -7,6 +7,7 @@ import {
   POSTGRES_PERSISTENCE,
   type InsertFlowExecutionResult,
   type InsertPaymentResult,
+  type SettlementOutcome,
   type TrustedPaymentRepository,
 } from "./repository";
 
@@ -201,6 +202,44 @@ function rowToPayment(row: PaymentRow): TrustedPayment {
   };
 }
 
+/**
+ * Shared payment insert (Phase 51.2): used by both `insertPayment` and the
+ * atomic `settleIntent` so transaction-hash idempotency
+ * (`ON CONFLICT (tx_hash) DO NOTHING`) can never drift between them.
+ */
+const PAYMENT_INSERT_SQL = `INSERT INTO agentpay_trusted_payments
+  (id, tx_hash, chain_id, token_address, agent_id, service_id, service_name, sender,
+   recipient, amount, amount_base_units, currency, status, block_number, owner_wallet_address, intent_id, confirmed_at, created_at)
+ VALUES (
+   $1, $2, $3::integer, $4, $5, $6::text, $7, $8, $9,
+   $10::numeric, $11, $12, $13, $14, $15, $16, $17::timestamptz, $18::timestamptz
+ )
+ ON CONFLICT (tx_hash) DO NOTHING
+ RETURNING *`;
+
+function paymentInsertValues(record: TrustedPayment, txHash: string): unknown[] {
+  return [
+    record.id,
+    txHash,
+    record.chainId,
+    record.tokenAddress,
+    record.agentId,
+    record.serviceId,
+    record.serviceName,
+    record.sender,
+    record.recipient,
+    record.amount.amount,
+    record.amountBaseUnits,
+    record.currency,
+    record.status,
+    record.blockNumber,
+    record.ownerWalletAddress,
+    record.intentId,
+    record.confirmedAt,
+    record.createdAt,
+  ];
+}
+
 interface FlowExecutionRow {
   id: string;
   tx_hash: string;
@@ -314,11 +353,90 @@ export function createPostgresTrustedRepository(connectionString: string): Trust
     },
 
     async consumeIntent(id, txHash, at) {
+      // Conditional (Phase 51.2, L4): never re-consume or force-consume an
+      // intent that is missing or already settled.
       await query(
-        `UPDATE agentpay_payment_intents SET status = 'consumed', tx_hash = $2 WHERE id = $1`,
+        `UPDATE agentpay_payment_intents SET status = 'consumed', tx_hash = $2 WHERE id = $1 AND status = 'pending'`,
         [id, txHash],
       );
       void at;
+    },
+
+    async settleIntent({ intentId, record }): Promise<SettlementOutcome> {
+      // Phase 51.2 (L4) — atomic settlement in ONE transaction.
+      //
+      // Deadlock safety: every code path acquires locks in the same order —
+      // the payment row first (INSERT), then the intent row (UPDATE) — and
+      // no transaction ever holds the intent row while waiting for a payment
+      // row, so two competing settlements cannot deadlock.
+      //
+      // Under READ COMMITTED the conditional UPDATE blocks on the intent row
+      // lock until a competing settlement commits, then re-evaluates
+      // `status = 'pending'`: exactly one settlement wins; the loser rolls
+      // its inserted payment back and reports "intent_already_settled".
+      await ensureSchema();
+      const canonicalTxHash = record.txHash.toLowerCase();
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+
+        const inserted = await client.query<PaymentRow>(
+          PAYMENT_INSERT_SQL,
+          paymentInsertValues(record, canonicalTxHash),
+        );
+        let paymentRow: PaymentRow;
+        let alreadyRecorded = false;
+        if (inserted.rows[0]) {
+          paymentRow = inserted.rows[0];
+        } else {
+          // Same transaction hash was already recorded — safe retry.
+          const existing = await client.query<PaymentRow>(
+            `SELECT * FROM agentpay_trusted_payments WHERE lower(tx_hash) = lower($1) LIMIT 1`,
+            [canonicalTxHash],
+          );
+          if (!existing.rows[0]) {
+            throw new Error("Insert conflicted but no existing record was found.");
+          }
+          paymentRow = existing.rows[0];
+          alreadyRecorded = true;
+        }
+
+        const consumed = await client.query(
+          `UPDATE agentpay_payment_intents SET status = 'consumed', tx_hash = $2
+           WHERE id = $1 AND status = 'pending' RETURNING id`,
+          [intentId, paymentRow.tx_hash],
+        );
+        if ((consumed.rowCount ?? 0) === 0) {
+          if (alreadyRecorded) {
+            // Phase 51.4 (D1): idempotent retry of an already-recorded hash
+            // whose intent is already consumed. Nothing new persists — the
+            // UPDATE touched no row — so keep the existing payment and report
+            // the same outcome as the in-memory adapter. The conditional
+            // UPDATE can only ever match the supplied intent, so no unrelated
+            // intent can be claimed here.
+            await client.query("COMMIT");
+            return { status: "already_recorded", record: rowToPayment(paymentRow) };
+          }
+          // The intent was already settled by a different transaction — roll
+          // the inserted payment back so nothing persists without consumption.
+          await client.query("ROLLBACK");
+          return { status: "intent_already_settled" };
+        }
+
+        await client.query("COMMIT");
+        return alreadyRecorded
+          ? { status: "already_recorded", record: rowToPayment(paymentRow) }
+          : { status: "settled", record: rowToPayment(paymentRow) };
+      } catch (error) {
+        try {
+          await client.query("ROLLBACK");
+        } catch {
+          // The transaction had already aborted or ended.
+        }
+        throw error;
+      } finally {
+        client.release();
+      }
     },
 
     async findByTxHash(txHash) {
@@ -398,35 +516,8 @@ export function createPostgresTrustedRepository(connectionString: string): Trust
       // notes on the optional case-insensitive index).
       const canonicalTxHash = record.txHash.toLowerCase();
       const inserted = await query<PaymentRow>(
-        `INSERT INTO agentpay_trusted_payments
-          (id, tx_hash, chain_id, token_address, agent_id, service_id, service_name, sender,
-           recipient, amount, amount_base_units, currency, status, block_number, owner_wallet_address, intent_id, confirmed_at, created_at)
-         VALUES (
-           $1, $2, $3::integer, $4, $5, $6::text, $7, $8, $9,
-           $10::numeric, $11, $12, $13, $14, $15, $16, $17::timestamptz, $18::timestamptz
-         )
-         ON CONFLICT (tx_hash) DO NOTHING
-         RETURNING *`,
-        [
-          record.id,
-          canonicalTxHash,
-          record.chainId,
-          record.tokenAddress,
-          record.agentId,
-          record.serviceId,
-          record.serviceName,
-          record.sender,
-          record.recipient,
-          record.amount.amount,
-          record.amountBaseUnits,
-          record.currency,
-          record.status,
-          record.blockNumber,
-          record.ownerWalletAddress,
-          record.intentId,
-          record.confirmedAt,
-          record.createdAt,
-        ],
+        PAYMENT_INSERT_SQL,
+        paymentInsertValues(record, canonicalTxHash),
       );
 
       if (inserted[0]) {
