@@ -150,15 +150,20 @@ export function createInMemoryTrustedRepository(): TrustedPaymentRepository {
     },
 
     async insertPayment(record) {
-      const key = record.txHash.toLowerCase();
-      const existing = paymentsByHash.get(key);
+      // Canonicalise before storing (Phase 50.3): the uniqueness key and the
+      // persisted record use the lowercase hash, so a letter-case variant of
+      // an already recorded transaction returns the existing record.
+      const canonical = normalizePayment({
+        ...record,
+        txHash: record.txHash.toLowerCase() as TrustedPayment["txHash"],
+      });
+      const existing = paymentsByHash.get(canonical.txHash);
       if (existing) {
         return { record: normalizePayment(existing), created: false };
       }
-      const normalized = normalizePayment(record);
-      paymentsByHash.set(key, normalized);
-      paymentsById.set(record.id, normalized);
-      return { record: normalized, created: true };
+      paymentsByHash.set(canonical.txHash, canonical);
+      paymentsById.set(canonical.id, canonical);
+      return { record: canonical, created: true };
     },
 
     async listPayments() {

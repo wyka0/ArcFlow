@@ -66,6 +66,18 @@ CREATE TABLE IF NOT EXISTS agentpay_trusted_payments (
   created_at TIMESTAMPTZ NOT NULL
 );
 
+-- Phase 50.3: tx_hash uniqueness is exact-text, but the application now
+-- canonicalises every write to lowercase (see insertPayment), so new
+-- letter-case variants of the same transaction collide on this constraint
+-- and the existing row is returned. A case-insensitive unique index
+-- (UNIQUE (lower(tx_hash))) is NOT created here: creating it would fail if
+-- any pre-canonicalisation mixed-case duplicate rows already exist, and that
+-- cannot be verified from application code. If an operator wants the index,
+-- first confirm no duplicates exist
+--   SELECT lower(tx_hash), count(*) FROM agentpay_trusted_payments
+--   GROUP BY lower(tx_hash) HAVING count(*) > 1;
+-- then add the index in a reviewed migration.
+
 -- Add intent_id column if it doesn't exist (migration for existing deployments)
 ALTER TABLE agentpay_trusted_payments ADD COLUMN IF NOT EXISTS intent_id TEXT;
 
@@ -310,9 +322,12 @@ export function createPostgresTrustedRepository(connectionString: string): Trust
     },
 
     async findByTxHash(txHash) {
+      // Canonical parameter (Phase 50.3); the lower() comparison is kept so
+      // any legacy mixed-case row still matches.
+      const canonical = txHash.toLowerCase();
       const rows = await query<PaymentRow>(
         `SELECT * FROM agentpay_trusted_payments WHERE lower(tx_hash) = lower($1) LIMIT 1`,
-        [txHash],
+        [canonical],
       );
       return rows[0] ? rowToPayment(rows[0]) : null;
     },
@@ -375,6 +390,13 @@ export function createPostgresTrustedRepository(connectionString: string): Trust
     },
 
     async insertPayment(record): Promise<InsertPaymentResult> {
+      // Phase 50.3 — canonicalise the hash before insert: the UNIQUE
+      // constraint compares exact stored text, so letter-case variants of the
+      // same transaction collide and the existing row is returned. All new
+      // writes are lowercase; the lower() lookups below still match any
+      // legacy mixed-case row. No schema change is made (see the module
+      // notes on the optional case-insensitive index).
+      const canonicalTxHash = record.txHash.toLowerCase();
       const inserted = await query<PaymentRow>(
         `INSERT INTO agentpay_trusted_payments
           (id, tx_hash, chain_id, token_address, agent_id, service_id, service_name, sender,
@@ -387,7 +409,7 @@ export function createPostgresTrustedRepository(connectionString: string): Trust
          RETURNING *`,
         [
           record.id,
-          record.txHash,
+          canonicalTxHash,
           record.chainId,
           record.tokenAddress,
           record.agentId,
@@ -413,7 +435,7 @@ export function createPostgresTrustedRepository(connectionString: string): Trust
 
       const existing = await query<PaymentRow>(
         `SELECT * FROM agentpay_trusted_payments WHERE lower(tx_hash) = lower($1) LIMIT 1`,
-        [record.txHash],
+        [canonicalTxHash],
       );
       if (!existing[0]) {
         throw new Error("Insert conflicted but no existing record was found.");

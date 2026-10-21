@@ -170,6 +170,42 @@ describe("verifyUsdcPayment", () => {
     });
   });
 
+  describe("receipt hash binding", () => {
+    const TX_HASH_B = `0x${"b".repeat(64)}` as const;
+    const TX_HASH_A_UPPER = `0x${"a".repeat(64).toUpperCase()}` as const;
+
+    it("rejects a receipt that belongs to a different transaction", () => {
+      const result = verifyUsdcPayment({
+        transactionHash: TX_HASH,
+        network: ARC_MAINNET,
+        expected: createExpectedPayment(),
+        receipt: createReceipt({ transactionHash: TX_HASH_B }),
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toBe("RECEIPT_HASH_MISMATCH");
+    });
+
+    it("binds the receipt hash case-insensitively (uppercase receipt, lowercase request)", () => {
+      const result = verifyUsdcPayment({
+        transactionHash: TX_HASH,
+        network: ARC_MAINNET,
+        expected: createExpectedPayment(),
+        receipt: createReceipt({ transactionHash: TX_HASH_A_UPPER }),
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("accepts an uppercase requested hash against a lowercase receipt hash", () => {
+      const result = verifyUsdcPayment({
+        transactionHash: TX_HASH_A_UPPER,
+        network: ARC_MAINNET,
+        expected: createExpectedPayment(),
+        receipt: createReceipt({ transactionHash: TX_HASH }),
+      });
+      expect(result.ok).toBe(true);
+    });
+  });
+
   describe("USDC contract validation", () => {
     it("rejects when no Transfer events from USDC contract", () => {
       const receipt = createReceipt({

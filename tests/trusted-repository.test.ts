@@ -169,6 +169,25 @@ describe("TrustedPaymentRepository (in-memory)", () => {
       expect(result.record.id).toBe("pay_1"); // Original id preserved
     });
 
+    it("stores a canonical hash and treats a case-variant insert as existing", async () => {
+      const payment = createTrustedPayment({ id: "pay_case" });
+      await repo.insertPayment(payment);
+
+      const variant = createTrustedPayment({
+        id: "pay_case_variant",
+        txHash: uppercaseHash(payment.txHash),
+      });
+      const result = await repo.insertPayment(variant);
+
+      expect(result.created).toBe(false);
+      expect(result.record.id).toBe("pay_case");
+      expect(result.record.txHash).toBe(payment.txHash);
+
+      // Lookups with either letter case resolve to the canonical record.
+      const found = await repo.findByTxHash(uppercaseHash(payment.txHash));
+      expect(found?.txHash).toBe(payment.txHash);
+    });
+
     it("lists payments in confirmedAt order", async () => {
       const now = new Date();
       const p1 = createTrustedPayment({
@@ -326,6 +345,26 @@ describe("TrustedPaymentRepository contract (interface)", () => {
 
       const listed = await repo.listPayments();
       expect(listed.some((p) => p.id === payment.id)).toBe(true);
+
+      await repo.clearAll();
+      expect(await repo.listPayments()).toHaveLength(0);
+    });
+
+    it("canonicalises payment hashes: a case-variant insert is idempotent and lookups match", async () => {
+      const payment = createTrustedPayment({ id: "pay_canon" });
+      await repo.insertPayment(payment);
+
+      const variant = createTrustedPayment({
+        id: "pay_canon_variant",
+        txHash: uppercaseHash(payment.txHash),
+      });
+      const duplicate = await repo.insertPayment(variant);
+      expect(duplicate.created).toBe(false);
+      expect(duplicate.record.id).toBe("pay_canon");
+      expect(duplicate.record.txHash).toBe(payment.txHash);
+
+      const byVariant = await repo.findByTxHash(uppercaseHash(payment.txHash));
+      expect(byVariant?.id).toBe("pay_canon");
 
       await repo.clearAll();
       expect(await repo.listPayments()).toHaveLength(0);

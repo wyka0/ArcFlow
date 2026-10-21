@@ -43,6 +43,7 @@ export interface MinimalReceipt {
 export type VerificationFailureReason =
   | "MALFORMED_HASH"
   | "RECEIPT_NOT_FOUND"
+  | "RECEIPT_HASH_MISMATCH"
   | "WRONG_CHAIN"
   | "RECEIPT_FAILED"
   | "NO_USDC_TRANSFER";
@@ -130,8 +131,9 @@ function mismatch(
 /**
  * Verify a receipt against a server-side expected payment.
  *
- * Ordering is deliberate: hash → chain → existence → success → token/event →
- * recipient → amount → sender. Nothing after the first failure runs.
+ * Ordering is deliberate: hash → chain → existence → receipt binding →
+ * success → token/event → recipient → amount → sender. Nothing after the
+ * first failure runs.
  */
 export function verifyUsdcPayment(input: {
   transactionHash: string;
@@ -157,6 +159,16 @@ export function verifyUsdcPayment(input: {
 
   if (!receipt) {
     return failure("RECEIPT_NOT_FOUND", "No Arc receipt exists for this transaction hash.");
+  }
+
+  // Bind the receipt to the requested transaction (Phase 50.2A): a reader
+  // that returns a receipt for a different transaction must never verify.
+  // The comparison is case-insensitive; hash casing itself is unchanged.
+  if (receipt.transactionHash.toLowerCase() !== transactionHash.toLowerCase()) {
+    return failure(
+      "RECEIPT_HASH_MISMATCH",
+      "The receipt does not correspond to the requested transaction hash.",
+    );
   }
 
   if (receipt.status !== "success") {

@@ -309,6 +309,25 @@ d("PostgreSQL integration tests (isolated Neon branch)", () => {
     expect(dupResult.created).toBe(false);
   });
 
+  it("canonicalises the payment tx_hash and rejects case-variant duplicates", async () => {
+    const payment = makeTestPayment();
+    const first = await testRepo.insertPayment(payment);
+    expect(first.created).toBe(true);
+    expect(first.record.txHash).toBe(payment.txHash);
+
+    const variant = makeTestPayment({
+      id: `${RUN_ID}-payment-case`,
+      txHash: `0x${payment.txHash.slice(2).toUpperCase()}` as TrustedPayment["txHash"],
+    });
+    const duplicate = await testRepo.insertPayment(variant);
+    expect(duplicate.created).toBe(false);
+    expect(duplicate.record.id).toBe(payment.id);
+    expect(duplicate.record.txHash).toBe(payment.txHash);
+
+    const found = await testRepo.findByTxHash(variant.txHash);
+    expect(found?.txHash).toBe(payment.txHash);
+  });
+
   it("creates and retrieves an auth session, then revokes it", async () => {
     const sessionId = `${RUN_ID}-auth-roundtrip`;
     const session = makeTestSession(sessionId);
